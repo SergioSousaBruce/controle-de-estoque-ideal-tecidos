@@ -1,0 +1,48 @@
+{
+  "entities": {
+    "InventoryCount": {
+      "title": "Registro de Contagem de Estoque",
+      "description": "Dados detalhados de uma contagem de produto no estoque.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "productType": { "type": "string" },
+        "model": { "type": "string" },
+        "brand": { "type": "string" },
+        "color": { "type": "string" },
+        "arrivalMonth": { "type": "string" },
+        "arrivalYear": { "type": "string" },
+        "gridType": { "type": "string", "enum": ["LETTER", "NUMERIC"] },
+        "sizes": { "type": "object" },
+        "total": { "type": "number" },
+        "createdAt": { "type": "number" },
+        "userId": { "type": "string" },
+        "conferente": { "type": "string" }
+      },
+      "required": ["productType", "model", "gridType", "sizes", "total", "createdAt", "userId", "conferente"]
+    },
+    "User": {
+      "title": "Usuário",
+      "description": "Perfil do usuário no sistema.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "lastLogin": { "type": "number" }
+      },
+      "required": ["uid", "email"]
+    }
+  },
+  "firestore": {
+    "/inventory/{countId}": {
+      "schema": "InventoryCount",
+      "description": "Coleção global de contagens de estoque."
+    },
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Perfis de usuários."
+    }
+  }
+}

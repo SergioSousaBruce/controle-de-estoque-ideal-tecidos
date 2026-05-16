@@ -1,0 +1,86 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helpers ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // --- Entity Validations ---
+    
+    function isValidInventoryCount(data) {
+      return data.keys().hasAll(['productType', 'model', 'gridType', 'sizes', 'total', 'createdAt', 'userId', 'conferente'])
+        && data.productType is string && data.productType.size() <= 100
+        && data.model is string && data.model.size() <= 100
+        && data.gridType in ['LETTER', 'NUMERIC']
+        && data.sizes is map
+        && data.total is number && data.total >= 0
+        && data.createdAt is int
+        && data.userId == request.auth.uid
+        && data.conferente is string && data.conferente.size() <= 100
+        && (!data.keys().contains('arrivalMonth') || (data.arrivalMonth is string && data.arrivalMonth.size() <= 2))
+        && (!data.keys().contains('arrivalYear') || (data.arrivalYear is string && data.arrivalYear.size() <= 4))
+        && (!data.keys().contains('brand') || (data.brand is string && data.brand.size() <= 100))
+        && (!data.keys().contains('color') || (data.color is string && data.color.size() <= 100));
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email'])
+        && data.uid == request.auth.uid
+        && data.email is string && data.email.size() <= 200;
+    }
+
+    // --- Collections ---
+
+    match /test/connection {
+      allow get: if true;
+    }
+
+    match /inventory/{countId} {
+      allow get: if isSignedIn() && existing().userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      
+      allow create: if isSignedIn() 
+        && isValidId(countId) 
+        && isValidInventoryCount(incoming())
+        && incoming().createdAt is int;
+      
+      allow update: if isSignedIn()
+        && isValidInventoryCount(incoming())
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && (
+          // Action: Edit fields
+          incoming().diff(existing()).affectedKeys().hasOnly(['productType', 'model', 'brand', 'color', 'arrivalMonth', 'arrivalYear', 'gridType', 'sizes', 'total', 'conferente'])
+        );
+        
+      allow delete: if isSignedIn() && existing().userId == request.auth.uid;
+    }
+
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+      allow create, update: if isOwner(userId) && isValidUser(incoming());
+    }
+  }
+}
