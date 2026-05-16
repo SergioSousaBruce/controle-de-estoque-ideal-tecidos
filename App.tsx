@@ -31,23 +31,14 @@ import { GoogleGenAI } from "@google/genai";
 import ReactMarkdown from 'react-markdown';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, PieChart, Pie } from 'recharts';
 import { 
-  auth, 
   db, 
-  googleProvider, 
   handleFirestoreError, 
   OperationType, 
   validateConnection 
 } from './src/lib/firebase';
 import { 
-  signInWithPopup, 
-  signOut, 
-  onAuthStateChanged, 
-  User 
-} from 'firebase/auth';
-import { 
   collection, 
   query, 
-  where, 
   orderBy, 
   onSnapshot, 
   doc, 
@@ -61,10 +52,6 @@ import { AppView, InventoryCount, SizeGridType } from './types';
 import { PRODUCT_TYPES, LETTER_SIZES, NUMERIC_SIZES, MONTHS, YEARS } from './constants';
 
 const App: React.FC = () => {
-  // Auth state
-  const [user, setUser] = useState<User | null>(null);
-  const [authLoading, setAuthLoading] = useState(true);
-
   // Persistence state
   const [counts, setCounts] = useState<InventoryCount[]>([]);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -111,29 +98,11 @@ const App: React.FC = () => {
     conferente: ''
   });
 
-  // Auth effect
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      setAuthLoading(false);
-      if (u) {
-        validateConnection();
-      }
-    });
-    return () => unsubscribe();
-  }, []);
-
   // Firestore sync effect
   useEffect(() => {
-    if (!user) {
-      setCounts([]);
-      return;
-    }
-
     setIsSyncing(true);
     const q = query(
       collection(db, 'inventory'),
-      where('userId', '==', user.uid),
       orderBy('createdAt', 'desc')
     );
 
@@ -144,70 +113,13 @@ const App: React.FC = () => {
       })) as InventoryCount[];
       setCounts(newCounts);
       setIsSyncing(false);
-
-      // Check for migration from localStorage
-      const localData = localStorage.getItem('ideal_tecidos_inventory');
-      if (localData) {
-        try {
-          const parsed = JSON.parse(localData) as InventoryCount[];
-          if (parsed.length > 0) {
-            handleMigration(parsed, user.uid);
-          }
-        } catch (e) {
-          console.error("Migration failed", e);
-        }
-      }
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, 'inventory');
       setIsSyncing(false);
     });
 
     return () => unsubscribe();
-  }, [user]);
-
-  const handleMigration = async (data: InventoryCount[], userId: string) => {
-    const batch = writeBatch(db);
-    let migratedCount = 0;
-    
-    for (const item of data) {
-      const docRef = doc(db, 'inventory', item.id);
-      batch.set(docRef, {
-        ...item,
-        userId,
-        createdAt: item.createdAt || Date.now()
-      });
-      migratedCount++;
-    }
-
-    if (migratedCount > 0) {
-      try {
-        await batch.commit();
-        localStorage.removeItem('ideal_tecidos_inventory');
-        showToast(`${migratedCount} registros sincronizados com a nuvem!`);
-      } catch (error) {
-        console.error("Batch commit failed", error);
-      }
-    }
-  };
-
-  const login = async () => {
-    try {
-      await signInWithPopup(auth, googleProvider);
-      showToast('Bem-vindo!');
-    } catch (error) {
-      console.error(error);
-      showToast('Falha no login', 'error');
-    }
-  };
-
-  const logout = async () => {
-    try {
-      await signOut(auth);
-      showToast('Até logo!');
-    } catch (error) {
-      console.error(error);
-    }
-  };
+  }, []);
 
   // Handlers
   const handleStartNew = () => {
@@ -221,7 +133,7 @@ const App: React.FC = () => {
       gridType: 'LETTER',
       sizes: {},
       total: 0,
-      conferente: user?.displayName || ''
+      conferente: ''
     });
     setEditingId(null);
     setCurrentView(AppView.IDENTIFY);
@@ -238,12 +150,10 @@ const App: React.FC = () => {
   };
 
   const confirmDelete = async () => {
-    if (!user) return;
-
     try {
       if (deleteModal.id === 'ALL') {
         const batch = writeBatch(db);
-        const q = query(collection(db, 'inventory'), where('userId', '==', user.uid));
+        const q = query(collection(db, 'inventory'));
         const snapshot = await getDocs(q);
         snapshot.docs.forEach((doc) => batch.delete(doc.ref));
         await batch.commit();
@@ -353,7 +263,7 @@ const App: React.FC = () => {
   };
 
   const saveInventory = async () => {
-    if (!formData.productType || !formData.model || !user) {
+    if (!formData.productType || !formData.model) {
       showToast('Preencha os campos obrigatórios', 'error');
       return;
     }
@@ -374,9 +284,8 @@ const App: React.FC = () => {
       gridType: formData.gridType as SizeGridType,
       sizes: formData.sizes as Record<string, number>,
       total: formData.total || 0,
-      conferente: (formData.conferente || user.displayName || 'Anonimo').trim(),
-      createdAt,
-      userId: user.uid
+      conferente: (formData.conferente || 'Anonimo').trim(),
+      createdAt
     };
 
     try {
@@ -493,98 +402,6 @@ const App: React.FC = () => {
     );
   }, [counts, searchTerm]);
 
-  if (authLoading) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-brand-dark text-white p-8">
-        <motion.div 
-          animate={{ rotate: 360 }}
-          transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
-          className="mb-6 opacity-20"
-        >
-          <Package size={60} strokeWidth={1} />
-        </motion.div>
-        <p className="text-[10px] font-black uppercase tracking-[0.4em] animate-pulse">Sincronizando Sistema...</p>
-      </div>
-    );
-  }
-
-  if (!user) {
-    return (
-      <div className="min-h-screen flex flex-col bg-brand-slate max-w-lg mx-auto overflow-hidden">
-        <div className="flex-1 flex flex-col items-center justify-center p-8 space-y-12 relative">
-          {/* Background Accents */}
-          <div className="absolute top-0 right-0 w-64 h-64 bg-brand-red rounded-full -mr-32 -mt-32 opacity-5"></div>
-          <div className="absolute bottom-0 left-0 w-64 h-64 bg-brand-blue rounded-full -ml-32 -mb-32 opacity-5"></div>
-
-          <motion.div 
-            initial={{ y: 20, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            className="text-center space-y-4 relative z-10"
-          >
-            {/* LARGE LOGO RECREATION */}
-            <div className="relative w-48 h-48 mx-auto mb-10 group">
-              {/* Outer Glow */}
-              <div className="absolute inset-0 bg-brand-blue/10 rounded-full blur-3xl group-hover:bg-brand-red/10 transition-colors duration-1000"></div>
-              
-              {/* Logo Body */}
-              <div className="relative w-full h-full bg-white rounded-full shadow-2xl border-4 border-white flex flex-col items-center justify-center overflow-hidden">
-                {/* Brand Text */}
-                <div className="relative z-20 flex flex-col items-center -mt-4">
-                  <span className="text-[#C02428] font-serif italic text-3xl font-black leading-none drop-shadow-sm">A Ideal</span>
-                  <span className="text-[#C02428] font-serif italic text-4xl font-black leading-none -mt-1 drop-shadow-sm">Tecidos</span>
-                  <div className="mt-2 text-[#1D2B5B] text-[8px] font-black uppercase tracking-[0.2em] opacity-80 decoration-brand-red/30 underline underline-offset-4">
-                    Calçados e Confecções
-                  </div>
-                </div>
-
-                {/* Bottom Graphic Waves (recreating the logo's bottom part) */}
-                <div className="absolute bottom-0 left-0 right-0 h-1/2">
-                  {/* Blue Deep Wave */}
-                  <div className="absolute bottom-0 inset-x-0 h-4/5 bg-[#1D2B5B] rounded-t-[100%] translate-y-4"></div>
-                  {/* Red Middle Wave */}
-                  <div className="absolute bottom-4 inset-x-0 h-1/2 bg-[#C02428] rounded-t-[100%] translate-y-4 -rotate-3 scale-x-110"></div>
-                  {/* Light Reflection */}
-                  <div className="absolute bottom-6 inset-x-0 h-1/4 bg-white/10 rounded-t-[100%] translate-y-4"></div>
-                </div>
-              </div>
-            </div>
-
-            <p className="text-[10px] font-black text-brand-dark uppercase tracking-[0.3em]">Ideal Tecidos • Controle de Estoque</p>
-          </motion.div>
-
-          <motion.div 
-            initial={{ y: 20, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            transition={{ delay: 0.1 }}
-            className="w-full space-y-4 relative z-10"
-          >
-            <button 
-              onClick={login}
-              className="w-full bg-brand-dark text-white py-6 rounded-[2rem] shadow-2xl flex items-center justify-center gap-4 group active:scale-95 transition-all"
-            >
-              <div className="bg-white p-1 rounded-lg">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <path d="M23.766 12.2764C23.766 11.4607 23.6999 10.6406 23.5588 9.83807H12.24V14.4591H18.7217C18.4528 15.9494 17.5885 17.2678 16.323 18.1056V21.1039H20.19C22.4608 19.0139 23.766 15.9274 23.766 12.2764Z" fill="#4285F4"/>
-                  <path d="M12.2401 24.0008C15.4766 24.0008 18.2059 22.9382 20.1945 21.1039L16.3275 18.1055C15.2517 18.8375 13.8627 19.252 12.2445 19.252C9.11388 19.252 6.45946 17.1399 5.50705 14.3003H1.5166V17.3912C3.55371 21.4434 7.7029 24.0008 12.2401 24.0008Z" fill="#34A853"/>
-                  <path d="M5.50255 14.3003C5.2535 13.5606 5.11687 12.7774 5.12128 11.9908C5.11687 11.2041 5.2535 10.4209 5.50255 9.68118V6.59033H1.5166C0.672648 8.27218 0.235948 10.1241 0.240112 11.9998L0.240112 11.9998L0.240112 12.0003C0.235948 13.876 0.672648 15.7279 1.5166 17.4098L5.50255 14.3003Z" fill="#FBBC05"/>
-                  <path d="M12.2401 4.74966C14.0084 4.72145 15.7119 5.37803 17.0016 6.58152L20.2695 3.32207C18.1619 1.34509 15.2505 0.242137 12.2401 0.250005C7.7029 0.250005 3.55371 2.8074 1.5166 6.85959L5.50255 9.68118C6.45064 6.84594 9.10947 4.74966 12.2401 4.74966Z" fill="#EA4335"/>
-                </svg>
-              </div>
-              <span className="font-display font-black uppercase text-sm tracking-widest">Entrar com Google</span>
-            </button>
-            <p className="text-center text-[10px] text-gray-400 font-bold uppercase tracking-widest px-8 leading-relaxed">
-              Sincronize seus dados em qualquer dispositivo com segurança.
-            </p>
-          </motion.div>
-        </div>
-        <footer className="p-8 text-center border-t border-white/40 space-y-1">
-          <p className="text-[10px] font-black text-brand-dark uppercase tracking-[0.3em]">Ideal Tecidos • Controle de Estoque</p>
-          <p className="text-[7px] font-bold text-gray-400 uppercase tracking-widest opacity-60">Handcrafted by Software Engineer Sergio Bruce • SSB</p>
-        </footer>
-      </div>
-    );
-  }
-
   return (
     <div className="min-h-screen flex flex-col max-w-lg mx-auto bg-brand-slate shadow-2xl relative overflow-x-hidden font-sans">
       {/* HEADER (No Print) */}
@@ -606,20 +423,6 @@ const App: React.FC = () => {
           </div>
         </div>
         <div className="flex items-center gap-3">
-          {user && (
-            <button 
-              onClick={logout}
-              className="group relative"
-              title="Sair"
-            >
-              <div className="w-10 h-10 rounded-xl overflow-hidden border border-white/20 group-hover:border-white/50 transition-colors">
-                <img src={user.photoURL || `https://ui-avatars.com/api/?name=${user.displayName}`} alt="User" className="w-full h-full object-cover" />
-              </div>
-              <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-red-500 rounded-full border-2 border-brand-dark flex items-center justify-center group-hover:scale-110 transition-transform">
-                <XCircle size={10} className="text-white" />
-              </div>
-            </button>
-          )}
           {currentView !== AppView.HOME && (
             <button 
               onClick={() => setCurrentView(AppView.HOME)}
@@ -1046,7 +849,14 @@ const App: React.FC = () => {
               <div className="bg-white p-6 rounded-[2rem] shadow-modern border border-gray-50">
                 <div className="space-y-4">
                   {(() => {
-                    const defaultSizes = formData.gridType === 'LETTER' ? LETTER_SIZES : NUMERIC_SIZES;
+                    const isInfantilStatus = formData.productType?.toLowerCase().includes('infantil');
+                    const defaultSizes = formData.gridType === 'LETTER' 
+                      ? LETTER_SIZES 
+                      : (isInfantilStatus 
+                          ? NUMERIC_SIZES.filter(s => parseInt(s, 10) <= 38)
+                          : NUMERIC_SIZES.filter(s => parseInt(s, 10) >= 33)
+                        );
+                    
                     // Get sizes from formData that aren't in defaults
                     const customSizes = Object.keys(formData.sizes || {}).filter(s => !defaultSizes.includes(s));
                     // Sort custom sizes: if numeric grid, try to sort numerically

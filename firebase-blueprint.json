@@ -19,7 +19,7 @@
         "userId": { "type": "string" },
         "conferente": { "type": "string" }
       },
-      "required": ["productType", "model", "gridType", "sizes", "total", "createdAt", "userId", "conferente"]
+      "required": ["productType", "model", "gridType", "sizes", "total", "createdAt"]
     },
     "User": {
       "title": "Usuário",

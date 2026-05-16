@@ -13,7 +13,7 @@ export interface InventoryCount {
   sizes: Record<string, number>;
   total: number;
   createdAt: number;
-  userId: string;
+  userId?: string;
   conferente?: string;
 }
 

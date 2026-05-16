@@ -30,14 +30,13 @@ service cloud.firestore {
     // --- Entity Validations ---
     
     function isValidInventoryCount(data) {
-      return data.keys().hasAll(['productType', 'model', 'gridType', 'sizes', 'total', 'createdAt', 'userId', 'conferente'])
+      return data.keys().hasAll(['productType', 'model', 'gridType', 'sizes', 'total', 'createdAt', 'conferente'])
         && data.productType is string && data.productType.size() <= 100
         && data.model is string && data.model.size() <= 100
         && data.gridType in ['LETTER', 'NUMERIC']
         && data.sizes is map
         && data.total is number && data.total >= 0
         && data.createdAt is int
-        && data.userId == request.auth.uid
         && data.conferente is string && data.conferente.size() <= 100
         && (!data.keys().contains('arrivalMonth') || (data.arrivalMonth is string && data.arrivalMonth.size() <= 2))
         && (!data.keys().contains('arrivalYear') || (data.arrivalYear is string && data.arrivalYear.size() <= 4))
@@ -47,7 +46,6 @@ service cloud.firestore {
 
     function isValidUser(data) {
       return data.keys().hasAll(['uid', 'email'])
-        && data.uid == request.auth.uid
         && data.email is string && data.email.size() <= 200;
     }
 
@@ -58,29 +56,25 @@ service cloud.firestore {
     }
 
     match /inventory/{countId} {
-      allow get: if isSignedIn() && existing().userId == request.auth.uid;
-      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow get: if true;
+      allow list: if true;
       
-      allow create: if isSignedIn() 
-        && isValidId(countId) 
+      allow create: if isValidId(countId) 
         && isValidInventoryCount(incoming())
         && incoming().createdAt is int;
       
-      allow update: if isSignedIn()
-        && isValidInventoryCount(incoming())
-        && incoming().userId == existing().userId
+      allow update: if isValidInventoryCount(incoming())
         && incoming().createdAt == existing().createdAt
         && (
           // Action: Edit fields
           incoming().diff(existing()).affectedKeys().hasOnly(['productType', 'model', 'brand', 'color', 'arrivalMonth', 'arrivalYear', 'gridType', 'sizes', 'total', 'conferente'])
         );
         
-      allow delete: if isSignedIn() && existing().userId == request.auth.uid;
+      allow delete: if true;
     }
 
     match /users/{userId} {
-      allow get: if isOwner(userId);
-      allow create, update: if isOwner(userId) && isValidUser(incoming());
+      allow get, create, update: if true;
     }
   }
 }
