@@ -14,6 +14,7 @@ import {
   XCircle,
   Download,
   Home,
+  LogIn,
   PlusCircle,
   Minus,
   CheckCircle2,
@@ -126,24 +127,19 @@ const App: React.FC = () => {
     const unsubscribe = onAuthStateChanged(auth, (u) => {
       setUser(u);
       setAuthLoading(false);
-      if (u) {
-        validateConnection();
-      }
+      // No wall here
     });
     return () => unsubscribe();
   }, []);
 
   // Firestore sync effect
   useEffect(() => {
-    if (!user) {
-      setCounts([]);
-      return;
-    }
-
     setIsSyncing(true);
+    const targetUserId = user?.uid || 'guest';
+    
     const q = query(
       collection(db, 'inventory'),
-      where('userId', '==', user.uid),
+      where('userId', '==', targetUserId),
       orderBy('createdAt', 'desc')
     );
 
@@ -176,19 +172,14 @@ const App: React.FC = () => {
       const result = await signInWithPopup(auth, provider);
       if (result.user) {
         showToast('Login realizado com sucesso!');
+        setIsEmailLogin(false);
       }
     } catch (error: any) {
       console.error("Detailed Login Error:", error);
       let msg = 'Falha no login com Google';
       
       if (error.code === 'auth/popup-blocked') {
-        msg = 'O navegador bloqueou a janela de login. Por favor, habilite popups para este site.';
-      } else if (error.code === 'auth/cancelled-popup-request') {
-        msg = 'A janela de login foi fechada antes da conclusão.';
-      } else if (error.code === 'auth/unauthorized-domain') {
-        msg = 'Este domínio não está autorizado no Firebase. Adicione o domínio da aplicação nas configurações do Firebase Authentication.';
-      } else if (error.code === 'auth/popup-closed-by-user') {
-        msg = 'Login cancelado pelo usuário.';
+        msg = 'O navegador bloqueou a janela de login. Por favor, habilite popups.';
       } else if (error.message) {
         msg = `Erro: ${error.message}`;
       }
@@ -270,17 +261,18 @@ const App: React.FC = () => {
   // Handlers
   const handleStartNew = () => {
     setFormData({
-      productType: '',
+      productType: PRODUCT_TYPES[0],
       model: '',
       brand: '',
       color: '',
-      arrivalMonth: '',
-      arrivalYear: '',
+      arrivalMonth: (new Date().getMonth() + 1).toString().padStart(2, '0'),
+      arrivalYear: new Date().getFullYear().toString(),
       gridType: 'LETTER',
       sizes: {},
       total: 0
     });
     setEditingId(null);
+    setAuthError(null);
     setCurrentView(AppView.IDENTIFY);
   };
 
@@ -295,12 +287,12 @@ const App: React.FC = () => {
   };
 
   const confirmDelete = async () => {
-    if (!user) return;
+    const targetUserId = user?.uid || 'guest';
     
     try {
       if (deleteModal.id === 'ALL') {
         const batch = writeBatch(db);
-        const q = query(collection(db, 'inventory'), where('userId', '==', user.uid));
+        const q = query(collection(db, 'inventory'), where('userId', '==', targetUserId));
         const snapshot = await getDocs(q);
         snapshot.docs.forEach((doc) => batch.delete(doc.ref));
         await batch.commit();
@@ -410,7 +402,7 @@ const App: React.FC = () => {
   };
 
   const saveInventory = async () => {
-    if (!formData.productType || !formData.model || !user) {
+    if (!formData.productType || !formData.model) {
       showToast('Preencha os campos obrigatórios', 'error');
       return;
     }
@@ -432,7 +424,7 @@ const App: React.FC = () => {
       sizes: formData.sizes as Record<string, number>,
       total: formData.total || 0,
       createdAt,
-      userId: user.uid
+      userId: user?.uid || 'guest'
     };
 
     try {
@@ -564,185 +556,80 @@ const App: React.FC = () => {
     );
   }
 
-  if (!user) {
+  // Auth Overlay / Optional Login
+  if (isEmailLogin && !user) {
     return (
-      <div className="min-h-screen flex flex-col bg-brand-slate max-w-lg mx-auto overflow-hidden">
-        <div className="flex-1 flex flex-col items-center justify-center p-8 space-y-12 relative">
-          {/* Background Accents */}
-          <div className="absolute top-0 right-0 w-64 h-64 bg-brand-red rounded-full -mr-32 -mt-32 opacity-5"></div>
-          <div className="absolute bottom-0 left-0 w-64 h-64 bg-brand-blue rounded-full -ml-32 -mb-32 opacity-5"></div>
+      <div className="min-h-screen flex flex-col bg-brand-slate max-w-lg mx-auto p-6 items-center justify-center">
+        <form onSubmit={handleEmailAuth} className="w-full space-y-4 bg-white p-8 rounded-[2rem] shadow-xl border border-gray-50 relative">
+          <button type="button" onClick={() => setIsEmailLogin(false)} className="absolute top-6 left-6 text-brand-blue flex items-center gap-1 font-black text-[10px] uppercase">
+            <ChevronLeft size={16} /> Voltar
+          </button>
+          
+          <div className="text-center pt-8 mb-6">
+            <h3 className="font-display font-black text-brand-dark uppercase text-xl leading-none">{isSignUp ? 'Criar Conta' : 'Área do Usuário'}</h3>
+            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mt-2">{isSignUp ? 'Cadastre-se para salvar seu estoque' : 'Acesse seu estoque privado'}</p>
+          </div>
 
-          <motion.div 
-            initial={{ y: 20, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            className="text-center space-y-4 relative z-10"
-          >
-            {/* LARGE LOGO RECREATION */}
-            <div className="relative w-48 h-48 mx-auto mb-10 group">
-              {/* Outer Glow */}
-              <div className="absolute inset-0 bg-brand-blue/10 rounded-full blur-3xl group-hover:bg-brand-red/10 transition-colors duration-1000"></div>
-              
-              {/* Logo Body */}
-              <div className="relative w-full h-full bg-white rounded-full shadow-2xl border-4 border-white flex flex-col items-center justify-center overflow-hidden">
-                {/* Brand Text */}
-                <div className="relative z-20 flex flex-col items-center -mt-4">
-                  <span className="text-[#C02428] font-serif italic text-3xl font-black leading-none drop-shadow-sm">A Ideal</span>
-                  <span className="text-[#C02428] font-serif italic text-4xl font-black leading-none -mt-1 drop-shadow-sm">Tecidos</span>
-                  <div className="mt-2 text-[#1D2B5B] text-[8px] font-black uppercase tracking-[0.2em] opacity-80 decoration-brand-red/30 underline underline-offset-4">
-                    Calçados e Confecções
-                  </div>
-                </div>
-
-                {/* Bottom Graphic Waves (recreating the logo's bottom part) */}
-                <div className="absolute bottom-0 left-0 right-0 h-1/2">
-                  {/* Blue Deep Wave */}
-                  <div className="absolute bottom-0 inset-x-0 h-4/5 bg-[#1D2B5B] rounded-t-[100%] translate-y-4"></div>
-                  {/* Red Middle Wave */}
-                  <div className="absolute bottom-4 inset-x-0 h-1/2 bg-[#C02428] rounded-t-[100%] translate-y-4 -rotate-3 scale-x-110"></div>
-                  {/* Light Reflection */}
-                  <div className="absolute bottom-6 inset-x-0 h-1/4 bg-white/10 rounded-t-[100%] translate-y-4"></div>
-                </div>
-              </div>
+          {authError && (
+            <div className="bg-red-50 border border-red-100 p-4 rounded-xl flex items-start gap-3 mb-4">
+              <AlertCircle className="text-red-500 shrink-0 mt-0.5" size={14} />
+              <p className="text-[10px] font-bold text-red-600 uppercase tracking-wider">{authError}</p>
             </div>
-
-            <p className="text-[10px] font-black text-brand-dark uppercase tracking-[0.3em]">Ideal Tecidos • Controle de Estoque</p>
-          </motion.div>
-
-          <motion.div 
-            initial={{ y: 20, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            transition={{ delay: 0.1 }}
-            className="w-full space-y-4 relative z-10"
-          >
-            {authError && (
-              <motion.div 
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
-                className="bg-red-50 border border-red-100 p-4 rounded-2xl flex items-start gap-3 mb-4"
-              >
-                <AlertCircle className="text-red-500 shrink-0 mt-0.5" size={18} />
-                <p className="text-[11px] font-bold text-red-600 leading-tight">{authError}</p>
-              </motion.div>
-            )}
-
-            {!isEmailLogin ? (
-              <div className="space-y-4">
-                <button 
-                  onClick={login}
-                  disabled={loginLoading}
-                  className="w-full bg-brand-dark text-white py-6 rounded-[2rem] shadow-2xl flex items-center justify-center gap-4 group active:scale-95 transition-all disabled:opacity-50"
-                >
-                  <div className="bg-white p-1 rounded-lg">
-                    {loginLoading ? (
-                      <Loader2 size={24} className="animate-spin text-brand-dark" />
-                    ) : (
-                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                        <path d="M23.766 12.2764C23.766 11.4607 23.6999 10.6406 23.5588 9.83807H12.24V14.4591H18.7217C18.4528 15.9494 17.5885 17.2678 16.323 18.1056V21.1039H20.19C22.4608 19.0139 23.766 15.9274 23.766 12.2764Z" fill="#4285F4"/>
-                        <path d="M12.2401 24.0008C15.4766 24.0008 18.2059 22.9382 20.1945 21.1039L16.3275 18.1055C15.2517 18.8375 13.8627 19.252 12.2445 19.252C9.11388 19.252 6.45946 17.1399 5.50705 14.3003H1.5166V17.3912C3.55371 21.4434 7.7029 24.0008 12.2401 24.0008Z" fill="#34A853"/>
-                        <path d="M5.50255 14.3003C5.2535 13.5606 5.11687 12.7774 5.12128 11.9908C5.11687 11.2041 5.2535 10.4209 5.50255 9.68118V6.59033H1.5166C0.672648 8.27218 0.235948 10.1241 0.240112 11.9998L0.240112 11.9998L0.240112 12.0003C0.235948 13.876 0.672648 15.7279 1.5166 17.4098L5.50255 14.3003Z" fill="#FBBC05"/>
-                        <path d="M12.2401 4.74966C14.0084 4.72145 15.7119 5.37803 17.0016 6.58152L20.2695 3.32207C18.1619 1.34509 15.2505 0.242137 12.2401 0.250005C7.7029 0.250005 3.55371 2.8074 1.5166 6.85959L5.50255 9.68118C6.45064 6.84594 9.10947 4.74966 12.2401 4.74966Z" fill="#EA4335"/>
-                      </svg>
-                    )}
-                  </div>
-                  <span className="font-display font-black uppercase text-sm tracking-widest">{loginLoading ? 'Aguarde...' : 'Entrar com Google'}</span>
-                </button>
-                <button 
-                  onClick={() => setIsEmailLogin(true)}
-                  className="w-full bg-white text-brand-dark py-5 rounded-2xl shadow-sm border border-gray-100 font-display font-black uppercase text-[10px] tracking-widest hover:bg-gray-50 transition-all flex items-center justify-center gap-3"
-                >
-                  <FileText size={16} />
-                  Entrar com E-mail
-                </button>
-              </div>
-            ) : (
-              <form onSubmit={handleEmailAuth} className="space-y-4 bg-white p-6 rounded-[2rem] shadow-xl border border-gray-50">
-                <div className="flex items-center justify-between mb-4">
-                  <button type="button" onClick={() => setIsEmailLogin(false)} className="text-brand-blue flex items-center gap-1 font-black text-[10px] uppercase">
-                    <ChevronLeft size={16} /> Voltar
-                  </button>
-                  <h3 className="font-display font-black text-brand-dark uppercase text-xs">{isSignUp ? 'Criar Conta' : 'Acesse sua Conta'}</h3>
-                </div>
-                
-                {isSignUp && (
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-2">Nome</label>
-                    <input 
-                      type="text" 
-                      required
-                      placeholder="Seu nome"
-                      className="w-full p-4 bg-brand-slate rounded-xl border border-transparent focus:border-brand-blue focus:bg-white outline-none font-bold text-sm"
-                      value={emailForm.name}
-                      onChange={e => setEmailForm(prev => ({ ...prev, name: e.target.value }))}
-                    />
-                  </div>
-                )}
-
-                <div className="space-y-2">
-                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-2">E-mail</label>
-                  <input 
-                    type="email" 
-                    required
-                    placeholder="seu@email.com"
-                    className="w-full p-4 bg-brand-slate rounded-xl border border-transparent focus:border-brand-blue focus:bg-white outline-none font-bold text-sm"
-                    value={emailForm.email}
-                    onChange={e => setEmailForm(prev => ({ ...prev, email: e.target.value }))}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-2">Senha</label>
-                  <input 
-                    type="password" 
-                    required
-                    placeholder="••••••"
-                    className="w-full p-4 bg-brand-slate rounded-xl border border-transparent focus:border-brand-blue focus:bg-white outline-none font-bold text-sm"
-                    value={emailForm.password}
-                    onChange={e => setEmailForm(prev => ({ ...prev, password: e.target.value }))}
-                  />
-                </div>
-
-                <button 
-                  type="submit"
-                  disabled={loginLoading}
-                  className="w-full bg-brand-dark text-white py-5 rounded-2xl shadow-lg font-display font-black uppercase text-xs tracking-widest flex items-center justify-center gap-3 active:scale-95 transition-all"
-                >
-                  {loginLoading ? <Loader2 size={20} className="animate-spin" /> : (isSignUp ? 'Cadastrar' : 'Entrar')}
-                </button>
-
-                <button 
-                  type="button"
-                  onClick={() => setIsSignUp(!isSignUp)}
-                  className="w-full text-center text-[10px] font-black text-brand-blue uppercase tracking-widest hover:underline"
-                >
-                  {isSignUp ? 'Já tem conta? Entre aqui' : 'Não tem conta? Cadastre-se'}
-                </button>
-              </form>
-            )}
-            <p className="text-center text-[10px] text-gray-400 font-bold uppercase tracking-widest px-8 leading-relaxed">
-              O controle de estoque é sincronizado na nuvem para segurança dos seus dados.
-            </p>
-
-            <div className="bg-brand-blue/5 border border-brand-blue/10 p-4 rounded-2xl space-y-2">
-              <h4 className="text-[9px] font-black text-brand-blue uppercase tracking-widest">Guia de Ativação</h4>
-              <p className="text-[9px] text-gray-500 font-medium leading-normal">
-                1. Ative o <b>E-mail/Senha</b> no Console do Firebase.<br/>
-                2. Adicione este domínio aos <b>Domínios Autorizados</b>:<br/>
-                <code className="bg-white px-1.5 py-0.5 rounded border border-gray-100 text-brand-blue font-mono block mt-1 overflow-hidden text-ellipsis">ais-dev-anu5vtqdgwwao4qyxtwbfs-295059394611.us-east1.run.app</code>
-              </p>
-              <a 
-                href={`https://console.firebase.google.com/project/${(firebaseConfig as any).projectId}/authentication/providers`}
-                target="_blank" 
-                rel="noreferrer"
-                className="text-[9px] font-black text-brand-blue uppercase tracking-widest flex items-center gap-1 hover:underline"
-              >
-                <ExternalLink size={10} /> Abrir Console do Firebase
-              </a>
+          )}
+          
+          {isSignUp && (
+            <div className="space-y-1">
+              <label className="text-[9px] font-black text-gray-400 uppercase tracking-widest ml-2">Nome Completo</label>
+              <input 
+                type="text" 
+                required
+                placeholder="Ex: João Silva"
+                className="w-full p-4 bg-brand-slate rounded-xl border-2 border-transparent focus:border-brand-blue outline-none font-bold text-sm"
+                value={emailForm.name}
+                onChange={e => setEmailForm(prev => ({ ...prev, name: e.target.value }))}
+              />
             </div>
-          </motion.div>
-        </div>
-        <footer className="p-8 text-center border-t border-white/40 space-y-1">
-          <p className="text-[10px] font-black text-brand-dark uppercase tracking-[0.3em]">Ideal Tecidos • Controle de Estoque</p>
-          <p className="text-[7px] font-bold text-gray-400 uppercase tracking-widest opacity-60">Handcrafted by Software Engineer Sergio Bruce • SSB</p>
-        </footer>
+          )}
+
+          <div className="space-y-1">
+            <label className="text-[9px] font-black text-gray-400 uppercase tracking-widest ml-2">E-mail</label>
+            <input 
+              type="email" 
+              required
+              placeholder="seu@email.com"
+              className="w-full p-4 bg-brand-slate rounded-xl border-2 border-transparent focus:border-brand-blue outline-none font-bold text-sm"
+              value={emailForm.email}
+              onChange={e => setEmailForm(prev => ({ ...prev, email: e.target.value }))}
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="text-[9px] font-black text-gray-400 uppercase tracking-widest ml-2">Senha</label>
+            <input 
+              type="password" 
+              required
+              placeholder="••••••"
+              className="w-full p-4 bg-brand-slate rounded-xl border-2 border-transparent focus:border-brand-blue outline-none font-bold text-sm"
+              value={emailForm.password}
+              onChange={e => setEmailForm(prev => ({ ...prev, password: e.target.value }))}
+            />
+          </div>
+
+          <button 
+            type="submit"
+            disabled={loginLoading}
+            className="w-full bg-brand-dark text-white py-5 rounded-2xl shadow-lg font-display font-black uppercase text-xs tracking-widest flex items-center justify-center gap-3 active:scale-95 transition-all mt-4"
+          >
+            {loginLoading ? <Loader2 size={18} className="animate-spin" /> : (isSignUp ? 'Criar minha Conta' : 'Entrar no Sistema')}
+          </button>
+
+          <button 
+            type="button"
+            onClick={() => setIsSignUp(!isSignUp)}
+            className="w-full text-center text-[10px] font-black text-brand-blue uppercase tracking-widest hover:underline pt-2"
+          >
+            {isSignUp ? 'Já possui conta? Faça Login' : 'Ainda não tem conta? Clique aqui'}
+          </button>
+        </form>
       </div>
     );
   }
@@ -768,20 +655,6 @@ const App: React.FC = () => {
           </div>
         </div>
         <div className="flex items-center gap-3">
-          {user && (
-            <button 
-              onClick={logout}
-              className="group relative"
-              title="Sair"
-            >
-              <div className="w-10 h-10 rounded-xl overflow-hidden border border-white/20 group-hover:border-white/50 transition-colors">
-                <img src={user.photoURL || `https://ui-avatars.com/api/?name=${user.displayName}`} alt="User" className="w-full h-full object-cover" />
-              </div>
-              <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-red-500 rounded-full border-2 border-brand-dark flex items-center justify-center group-hover:scale-110 transition-transform">
-                <XCircle size={10} className="text-white" />
-              </div>
-            </button>
-          )}
           {currentView !== AppView.HOME && (
             <button 
               onClick={() => setCurrentView(AppView.HOME)}
