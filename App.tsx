@@ -23,7 +23,8 @@ import {
   TrendingUp,
   AlertTriangle,
   UploadCloud,
-  Loader2
+  Loader2,
+  ExternalLink
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -38,11 +39,13 @@ import {
   OperationType, 
   validateConnection 
 } from './src/lib/firebase';
+import firebaseConfig from './firebase-applet-config.json';
 import { 
   signInWithPopup, 
   signOut, 
   onAuthStateChanged, 
   User,
+  GoogleAuthProvider,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   updateProfile
@@ -163,19 +166,35 @@ const App: React.FC = () => {
     setAuthError(null);
     setLoginLoading(true);
     try {
-      auth.languageCode = 'pt-BR';
-      await signInWithPopup(auth, googleProvider);
-      showToast('Bem-vindo!');
-    } catch (error: any) {
-      console.error(error);
-      let msg = 'Falha no login com Google';
-      if (error.code === 'auth/popup-blocked') {
-        msg = 'O navegador bloqueou a janela de login. Por favor, habilite popups.';
-      } else if (error.code === 'auth/cancelled-popup-request') {
-        msg = 'Login cancelado.';
+      auth.useDeviceLanguage();
+      // Ensure we are using a fresh provider instance
+      const provider = new GoogleAuthProvider();
+      provider.setCustomParameters({
+        prompt: 'select_account'
+      });
+      
+      const result = await signInWithPopup(auth, provider);
+      if (result.user) {
+        showToast('Login realizado com sucesso!');
       }
+    } catch (error: any) {
+      console.error("Detailed Login Error:", error);
+      let msg = 'Falha no login com Google';
+      
+      if (error.code === 'auth/popup-blocked') {
+        msg = 'O navegador bloqueou a janela de login. Por favor, habilite popups para este site.';
+      } else if (error.code === 'auth/cancelled-popup-request') {
+        msg = 'A janela de login foi fechada antes da conclusão.';
+      } else if (error.code === 'auth/unauthorized-domain') {
+        msg = 'Este domínio não está autorizado no Firebase. Adicione o domínio da aplicação nas configurações do Firebase Authentication.';
+      } else if (error.code === 'auth/popup-closed-by-user') {
+        msg = 'Login cancelado pelo usuário.';
+      } else if (error.message) {
+        msg = `Erro: ${error.message}`;
+      }
+      
       setAuthError(msg);
-      showToast(msg, 'error');
+      showToast('Falha no login', 'error');
     } finally {
       setLoginLoading(false);
     }
@@ -183,29 +202,55 @@ const App: React.FC = () => {
 
   const handleEmailAuth = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!emailForm.email || !emailForm.password) {
+      setAuthError('Preencha e-mail e senha.');
+      return;
+    }
+
     setAuthError(null);
     setLoginLoading(true);
     try {
       if (isSignUp) {
+        if (!emailForm.name) {
+          throw new Error('Nome é obrigatório para cadastro.');
+        }
         const userCredential = await createUserWithEmailAndPassword(auth, emailForm.email, emailForm.password);
         await updateProfile(userCredential.user, { displayName: emailForm.name });
-        showToast('Conta criada!');
+        showToast('Conta criada com sucesso!');
       } else {
         await signInWithEmailAndPassword(auth, emailForm.email, emailForm.password);
-        showToast('Bem-vindo!');
+        showToast('Bem-vindo de volta!');
       }
     } catch (error: any) {
-      console.error(error);
+      console.error("Email Auth Error:", error);
       let msg = 'Erro na autenticação';
-      if (error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password') {
-        msg = 'E-mail ou senha incorretos.';
-      } else if (error.code === 'auth/email-already-in-use') {
-        msg = 'Este e-mail já está sendo usado.';
-      } else if (error.code === 'auth/operation-not-allowed') {
-        msg = 'O login por e-mail precisa ser habilitado no Console do Firebase.';
-      } else if (error.code === 'auth/weak-password') {
-        msg = 'A senha deve ter pelo menos 6 caracteres.';
+      
+      switch (error.code) {
+        case 'auth/user-not-found':
+          msg = 'Usuário não encontrado. Verifique o e-mail ou cadastre-se.';
+          break;
+        case 'auth/wrong-password':
+          msg = 'Senha incorreta. Tente novamente.';
+          break;
+        case 'auth/email-already-in-use':
+          msg = 'Este e-mail já está cadastrado.';
+          break;
+        case 'auth/invalid-email':
+          msg = 'E-mail inválido.';
+          break;
+        case 'auth/operation-not-allowed':
+          msg = 'O login por E-mail precisa ser ativado no Console do Firebase (Authentication -> Sign-in method).';
+          break;
+        case 'auth/weak-password':
+          msg = 'A senha deve ter pelo menos 6 caracteres.';
+          break;
+        case 'auth/network-request-failed':
+          msg = 'Erro de conexão. Verifique sua internet.';
+          break;
+        default:
+          msg = error.message || 'Ocorreu um erro inesperado.';
       }
+      
       setAuthError(msg);
       showToast(msg, 'error');
     } finally {
@@ -675,6 +720,23 @@ const App: React.FC = () => {
             <p className="text-center text-[10px] text-gray-400 font-bold uppercase tracking-widest px-8 leading-relaxed">
               O controle de estoque é sincronizado na nuvem para segurança dos seus dados.
             </p>
+
+            <div className="bg-brand-blue/5 border border-brand-blue/10 p-4 rounded-2xl space-y-2">
+              <h4 className="text-[9px] font-black text-brand-blue uppercase tracking-widest">Guia de Ativação</h4>
+              <p className="text-[9px] text-gray-500 font-medium leading-normal">
+                1. Ative o <b>E-mail/Senha</b> no Console do Firebase.<br/>
+                2. Adicione este domínio aos <b>Domínios Autorizados</b>:<br/>
+                <code className="bg-white px-1.5 py-0.5 rounded border border-gray-100 text-brand-blue font-mono block mt-1 overflow-hidden text-ellipsis">ais-dev-anu5vtqdgwwao4qyxtwbfs-295059394611.us-east1.run.app</code>
+              </p>
+              <a 
+                href={`https://console.firebase.google.com/project/${(firebaseConfig as any).projectId}/authentication/providers`}
+                target="_blank" 
+                rel="noreferrer"
+                className="text-[9px] font-black text-brand-blue uppercase tracking-widest flex items-center gap-1 hover:underline"
+              >
+                <ExternalLink size={10} /> Abrir Console do Firebase
+              </a>
+            </div>
           </motion.div>
         </div>
         <footer className="p-8 text-center border-t border-white/40 space-y-1">
