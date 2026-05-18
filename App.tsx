@@ -402,39 +402,55 @@ const App: React.FC = () => {
   };
 
   const saveInventory = async () => {
-    if (!formData.productType || !formData.model) {
-      showToast('Preencha os campos obrigatórios', 'error');
+    // Sanitize data
+    const productType = (formData.productType || '').trim();
+    const model = (formData.model || '').trim();
+
+    if (!productType || !model) {
+      showToast('Preencha Produto e Modelo', 'error');
       return;
     }
 
     setIsSaving(true);
-    const id = editingId || crypto.randomUUID();
-    const createdAt = editingId 
-      ? counts.find(c => c.id === editingId)?.createdAt || Date.now() 
-      : Date.now();
-
-    const finalCount = {
-      productType: formData.productType.trim(),
-      model: formData.model.trim(),
-      brand: (formData.brand || '').trim(),
-      color: (formData.color || '').trim(),
-      arrivalMonth: formData.arrivalMonth || '',
-      arrivalYear: formData.arrivalYear || '',
-      gridType: formData.gridType as SizeGridType,
-      sizes: formData.sizes as Record<string, number>,
-      total: formData.total || 0,
-      createdAt,
-      userId: user?.uid || 'guest'
-    };
-
     try {
-      await setDoc(doc(db, 'inventory', id), finalCount);
+      // Use Firestore to generate ID if we don't have one
+      const inventoryRef = collection(db, 'inventory');
+      const itemDoc = editingId ? doc(db, 'inventory', editingId) : doc(inventoryRef);
+      
+      const createdAt = editingId 
+        ? counts.find(c => c.id === editingId)?.createdAt || Date.now() 
+        : Date.now();
+
+      const finalCount = {
+        productType,
+        model,
+        brand: (formData.brand || '').trim(),
+        color: (formData.color || '').trim(),
+        arrivalMonth: formData.arrivalMonth || '',
+        arrivalYear: formData.arrivalYear || '',
+        gridType: (formData.gridType as SizeGridType) || 'LETTER',
+        sizes: formData.sizes as Record<string, number>,
+        total: formData.total || 0,
+        createdAt,
+        userId: user?.uid || 'guest'
+      };
+
+      await setDoc(itemDoc, finalCount);
       showToast(editingId ? 'Registro atualizado' : 'Registro salvo com sucesso');
       setIsSaving(false);
       return true;
-    } catch (error) {
+    } catch (error: any) {
+      console.error("Save Error Details:", error);
       handleFirestoreError(error, OperationType.WRITE, 'inventory');
-      showToast('Erro ao salvar no banco de dados', 'error');
+      
+      let msg = 'Erro ao salvar no banco de dados';
+      if (error.code === 'permission-denied') {
+        msg = 'Permissão negada. Verifique as regras do banco.';
+      } else if (error.message) {
+        msg = `Erro: ${error.message}`;
+      }
+      
+      showToast(msg, 'error');
       setIsSaving(false);
       return false;
     }
