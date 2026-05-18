@@ -16,10 +16,9 @@
         "sizes": { "type": "object" },
         "total": { "type": "number" },
         "createdAt": { "type": "number" },
-        "userId": { "type": "string" },
-        "conferente": { "type": "string" }
+        "userId": { "type": "string" }
       },
-      "required": ["productType", "model", "gridType", "sizes", "total", "createdAt"]
+      "required": ["productType", "model", "gridType", "sizes", "total", "createdAt", "userId"]
     },
     "User": {
       "title": "Usuário",

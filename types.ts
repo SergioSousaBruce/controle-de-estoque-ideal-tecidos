@@ -13,8 +13,7 @@ export interface InventoryCount {
   sizes: Record<string, number>;
   total: number;
   createdAt: number;
-  userId?: string;
-  conferente?: string;
+  userId: string;
 }
 
 export enum AppView {
