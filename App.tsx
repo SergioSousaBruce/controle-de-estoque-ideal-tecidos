@@ -77,6 +77,18 @@ const App: React.FC = () => {
   const [isSignUp, setIsSignUp] = useState(false);
   const [loginLoading, setLoginLoading] = useState(false);
 
+  // Get or Create Device ID for isolation
+  const getDeviceId = () => {
+    let id = localStorage.getItem('ideal_tecidos_device_id');
+    if (!id) {
+      id = `device_${Math.random().toString(36).substring(2, 11)}_${Date.now()}`;
+      localStorage.setItem('ideal_tecidos_device_id', id);
+    }
+    return id;
+  };
+
+  const currentUserId = user?.uid || getDeviceId();
+
   // Persistence state
   const [counts, setCounts] = useState<InventoryCount[]>([]);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -134,13 +146,23 @@ const App: React.FC = () => {
 
   // Firestore sync effect
   useEffect(() => {
+    if (!currentUserId) {
+      setIsSyncing(false);
+      return;
+    }
+
     setIsSyncing(true);
-    const targetUserId = user?.uid || 'guest';
+    const targetUserId = currentUserId;
     
+    // Defensive check to avoid querying with invalid values
+    if (typeof targetUserId !== 'string' || targetUserId === '') {
+      setIsSyncing(false);
+      return;
+    }
+
     const q = query(
       collection(db, 'inventory'),
-      where('userId', '==', targetUserId),
-      orderBy('createdAt', 'desc')
+      where('userId', '==', targetUserId)
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -148,15 +170,18 @@ const App: React.FC = () => {
         ...doc.data(),
         id: doc.id
       })) as InventoryCount[];
+      // Sort in memory to avoid needing a composite index for now
+      newCounts.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
       setCounts(newCounts);
       setIsSyncing(false);
     }, (error) => {
+      console.error("Firestore List Error:", error, "for userId:", targetUserId);
       handleFirestoreError(error, OperationType.LIST, 'inventory');
       setIsSyncing(false);
     });
 
     return () => unsubscribe();
-  }, [user]);
+  }, [user, currentUserId]);
 
   const login = async () => {
     setAuthError(null);
@@ -287,7 +312,7 @@ const App: React.FC = () => {
   };
 
   const confirmDelete = async () => {
-    const targetUserId = user?.uid || 'guest';
+    const targetUserId = currentUserId;
     
     try {
       if (deleteModal.id === 'ALL') {
@@ -432,7 +457,7 @@ const App: React.FC = () => {
         sizes: formData.sizes as Record<string, number>,
         total: formData.total || 0,
         createdAt,
-        userId: user?.uid || 'guest'
+        userId: currentUserId
       };
 
       await setDoc(itemDoc, finalCount);
@@ -454,6 +479,89 @@ const App: React.FC = () => {
       setIsSaving(false);
       return false;
     }
+  };
+
+  const generateSinglePDF = (item: Partial<InventoryCount>) => {
+    const doc = new jsPDF();
+    const now = new Date();
+    const dateStr = now.toLocaleDateString('pt-BR');
+    const timeStr = now.toLocaleTimeString('pt-BR');
+
+    // Header Design
+    doc.setFillColor(192, 36, 40); // brand-red
+    doc.rect(0, 0, 210, 15, 'F');
+    
+    doc.setFontSize(22);
+    doc.setTextColor(192, 36, 40); // brand-red
+    doc.setFont(undefined, 'bold');
+    doc.text('IDEAL TECIDOS', 14, 30);
+    
+    doc.setFontSize(10);
+    doc.setTextColor(29, 43, 91); // brand-blue
+    doc.setFont(undefined, 'bold');
+    doc.text('CONTROLE DE ESTOQUE - COMPROVANTE', 14, 36);
+
+    // Metadata Box
+    doc.setDrawColor(230, 230, 230);
+    doc.setFillColor(250, 250, 250);
+    doc.roundedRect(14, 45, 182, 30, 3, 3, 'FD');
+
+    doc.setFontSize(9);
+    doc.setTextColor(100, 100, 100);
+    doc.setFont(undefined, 'bold');
+    doc.text('PRODUTO:', 20, 53);
+    doc.text('MODELO:', 20, 60);
+    doc.text('MARCA/COR:', 20, 67);
+
+    doc.setTextColor(29, 43, 91);
+    doc.text(item.productType?.toUpperCase() || '-', 45, 53);
+    doc.text(item.model?.toUpperCase() || '-', 45, 60);
+    doc.text(`${item.brand || '-'} / ${item.color || '-'}`, 45, 67);
+
+    doc.setTextColor(100, 100, 100);
+    doc.text('DATA:', 130, 53);
+    doc.text('CHEGADA:', 130, 60);
+    doc.text('TOTAL:', 130, 67);
+
+    doc.setTextColor(29, 43, 91);
+    doc.text(dateStr, 150, 53);
+    doc.text(`${item.arrivalMonth || '--'}/${item.arrivalYear || '--'}`, 150, 60);
+    doc.setFontSize(11);
+    doc.setTextColor(192, 36, 40);
+    doc.text(item.total?.toString() || '0', 150, 67);
+
+    // Grid Table
+    const tableRows = Object.entries(item.sizes || {})
+      .filter(([_, qty]) => (qty as any) > 0)
+      .map(([size, qty]) => [size, qty.toString()]);
+
+    autoTable(doc, {
+      startY: 85,
+      head: [['Tamanho', 'Quantidade']],
+      body: tableRows,
+      theme: 'grid',
+      headStyles: { 
+        fillColor: [29, 43, 91],
+        textColor: [255, 255, 255],
+        fontSize: 10,
+        fontStyle: 'bold',
+        halign: 'center'
+      },
+      columnStyles: {
+        0: { halign: 'center', fontStyle: 'bold', cellWidth: 40 },
+        1: { halign: 'center', fontSize: 12, fontStyle: 'bold' }
+      },
+      margin: { left: 40, right: 40 }
+    });
+
+    // Footer
+    doc.setFontSize(8);
+    doc.setTextColor(150, 150, 150);
+    const footerText = `Documento emitido via Ideal Tecidos - Controle de Estoque em ${dateStr} ${timeStr}`;
+    doc.text(footerText, 14, doc.internal.pageSize.getHeight() - 10);
+
+    const fileName = `Contagem_${item.model || 'Item'}_${item.color || ''}_${dateStr.replace(/\//g, '-')}.pdf`;
+    doc.save(fileName);
   };
 
   const generatePDF = () => {
@@ -478,7 +586,7 @@ const App: React.FC = () => {
     doc.text('CALÇADOS E CONFECÇÕES', 14, 36);
     
     doc.setFontSize(9);
-    doc.setTextColor(100);
+    doc.setTextColor(100, 100, 100);
     doc.setFont(undefined, 'normal');
     doc.text(`Relatório de Controle de Estoque`, 14, 42);
     doc.text(`Gerado em: ${dateStr} às ${timeStr}`, 14, 46);
@@ -532,7 +640,7 @@ const App: React.FC = () => {
     for (let i = 1; i <= pageCount; i++) {
       doc.setPage(i);
       doc.setFontSize(8);
-      doc.setTextColor(150);
+      doc.setTextColor(150, 150, 150);
       doc.text(
         `Página ${i} de ${pageCount} - A Ideal Tecidos | Calçados e Confecções`,
         doc.internal.pageSize.getWidth() / 2,
@@ -822,6 +930,16 @@ const App: React.FC = () => {
                             </div>
                             
                             <div className="flex gap-2">
+                              <button 
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  generateSinglePDF(item);
+                                }}
+                                className="w-11 h-11 flex items-center justify-center bg-brand-slate text-brand-blue rounded-xl hover:bg-white hover:shadow-md transition-all active:scale-90"
+                                title="Baixar PDF"
+                              >
+                                <Download size={18} strokeWidth={2.5} />
+                              </button>
                               <button 
                                 onClick={(e) => {
                                   e.stopPropagation();
@@ -1192,42 +1310,63 @@ const App: React.FC = () => {
                   <Package size={80} strokeWidth={1.5} className="text-white/10 -rotate-12 group-hover:rotate-0 transition-transform duration-700" />
                 </div>
 
-                <div className="flex gap-3 relative z-10 w-full">
+                <div className="flex flex-col gap-3 relative z-10 w-full">
+                  <div className="flex gap-3">
+                    <motion.button 
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      disabled={isSaving}
+                      onClick={async () => {
+                        const success = await saveInventory();
+                        if (success) {
+                          setCurrentView(AppView.HOME);
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }
+                      }}
+                      className="flex-1 bg-brand-red hover:brightness-110 shadow-xl shadow-brand-red/20 text-white py-5 rounded-[1.5rem] active:scale-[0.98] transition-all flex items-center justify-center gap-2 group/btn disabled:opacity-50"
+                    >
+                      {isSaving ? (
+                        <Loader2 size={20} className="animate-spin" />
+                      ) : (
+                        <Save size={20} strokeWidth={3} className="group-hover/btn:scale-110 transition-transform" />
+                      )}
+                      <span className="text-[10px] font-black uppercase tracking-[0.1em]">{isSaving ? 'Salvando...' : 'Salvar'}</span>
+                    </motion.button>
+                    
+                    <motion.button 
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      disabled={isSaving}
+                      onClick={async () => {
+                        const success = await saveInventory();
+                        if (success) {
+                          handleStartNew();
+                        }
+                      }}
+                      className="flex-1 bg-white/10 hover:bg-white/20 text-white py-5 rounded-[1.5rem] border border-white/10 active:scale-[0.98] transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                    >
+                      <Plus size={20} strokeWidth={3} />
+                      <span className="text-[10px] font-black uppercase tracking-[0.1em] leading-tight text-center">Salvar & Novo</span>
+                    </motion.button>
+                  </div>
+
                   <motion.button 
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.98 }}
+                    whileHover={{ scale: 1.01 }}
+                    whileTap={{ scale: 0.99 }}
                     disabled={isSaving}
                     onClick={async () => {
                       const success = await saveInventory();
                       if (success) {
+                        generateSinglePDF(formData as InventoryCount);
+                        showToast('PDF Gerado e Histórico Atualizado!');
                         setCurrentView(AppView.HOME);
                         window.scrollTo({ top: 0, behavior: 'smooth' });
                       }
                     }}
-                    className="flex-1 bg-brand-red hover:brightness-110 shadow-xl shadow-brand-red/20 text-white py-5 rounded-[1.5rem] active:scale-[0.98] transition-all flex items-center justify-center gap-2 group/btn disabled:opacity-50"
+                    className="w-full bg-brand-blue hover:brightness-110 shadow-xl shadow-brand-blue/20 text-white py-5 rounded-[1.5rem] active:scale-[0.98] transition-all flex items-center justify-center gap-3 disabled:opacity-50"
                   >
-                    {isSaving ? (
-                      <Loader2 size={20} className="animate-spin" />
-                    ) : (
-                      <Save size={20} strokeWidth={3} className="group-hover/btn:scale-110 transition-transform" />
-                    )}
-                    <span className="text-[10px] font-black uppercase tracking-[0.1em]">{isSaving ? 'Salvando...' : 'Salvar'}</span>
-                  </motion.button>
-                  
-                  <motion.button 
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.98 }}
-                    disabled={isSaving}
-                    onClick={async () => {
-                      const success = await saveInventory();
-                      if (success) {
-                        handleStartNew();
-                      }
-                    }}
-                    className="flex-1 bg-white/10 hover:bg-white/20 text-white py-5 rounded-[1.5rem] border border-white/10 active:scale-[0.98] transition-all flex items-center justify-center gap-2 disabled:opacity-50"
-                  >
-                    <Plus size={20} strokeWidth={3} />
-                    <span className="text-[10px] font-black uppercase tracking-[0.1em] leading-tight text-center">Salvar & Novo</span>
+                    <Download size={20} strokeWidth={3} />
+                    <span className="text-xs font-black uppercase tracking-[0.2em]">Salvar & Baixar PDF</span>
                   </motion.button>
                 </div>
               </div>

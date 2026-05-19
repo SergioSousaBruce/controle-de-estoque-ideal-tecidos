@@ -37,7 +37,7 @@ service cloud.firestore {
         && data.sizes is map
         && data.total is number && data.total >= 0
         && data.createdAt is int
-        && (data.userId == 'guest' || (request.auth != null && data.userId == request.auth.uid))
+        && (data.userId >= 'device_' && data.userId < 'device_~' || data.userId == 'guest' || (request.auth != null && data.userId == request.auth.uid))
         && (!data.keys().contains('arrivalMonth') || (data.arrivalMonth is string && data.arrivalMonth.size() <= 2))
         && (!data.keys().contains('arrivalYear') || (data.arrivalYear is string && data.arrivalYear.size() <= 4))
         && (!data.keys().contains('brand') || (data.brand is string && data.brand.size() <= 100))
@@ -57,15 +57,17 @@ service cloud.firestore {
     }
 
     match /inventory/{countId} {
-      allow get: if resource.data.userId == 'guest' || (isSignedIn() && existing().userId == request.auth.uid);
-      allow list: if resource.data.userId == 'guest' || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow read: if 
+        (resource.data.userId == 'guest') || 
+        (resource.data.userId >= 'device_' && resource.data.userId < 'device_~') ||
+        (isSignedIn() && resource.data.userId == request.auth.uid);
       
-      allow create: if (incoming().userId == 'guest' || isSignedIn())
+      allow create: if (incoming().userId == 'guest' || (incoming().userId >= 'device_' && incoming().userId < 'device_~') || isSignedIn())
         && isValidId(countId) 
         && isValidInventoryCount(incoming())
         && incoming().createdAt is int;
       
-      allow update: if (incoming().userId == 'guest' || (isSignedIn() && incoming().userId == request.auth.uid))
+      allow update: if (incoming().userId == 'guest' || (incoming().userId >= 'device_' && incoming().userId < 'device_~') || (isSignedIn() && incoming().userId == request.auth.uid))
         && isValidInventoryCount(incoming())
         && incoming().userId == existing().userId
         && incoming().createdAt == existing().createdAt
@@ -74,7 +76,7 @@ service cloud.firestore {
           incoming().diff(existing()).affectedKeys().hasOnly(['productType', 'model', 'brand', 'color', 'arrivalMonth', 'arrivalYear', 'gridType', 'sizes', 'total'])
         );
         
-      allow delete: if existing().userId == 'guest' || (isSignedIn() && existing().userId == request.auth.uid);
+      allow delete: if existing().userId.startsWith('device_') || existing().userId == 'guest' || (isSignedIn() && existing().userId == request.auth.uid);
     }
 
     match /users/{userId} {

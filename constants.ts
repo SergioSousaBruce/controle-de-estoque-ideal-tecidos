@@ -22,6 +22,8 @@ export const PRODUCT_TYPES = [
   'Tamanco',
   'Saltos',
   'Rasteirinhas',
+  'Sapatilha Feminina Adulta',
+  'Sapatilha Feminina Infantil',
   'Papetes Adulto',
   'Papetes Infantil',
   'Botas Masculinas',
