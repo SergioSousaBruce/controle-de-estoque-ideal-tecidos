@@ -313,27 +313,48 @@ const App: React.FC = () => {
 
   const confirmDelete = async () => {
     const targetUserId = currentUserId;
+    const isSingleDelete = deleteModal.id !== 'ALL';
+    const deleteId = deleteModal.id;
+    
+    // Close modal immediately for better UX
+    setDeleteModal({ isOpen: false, id: '' });
     
     try {
-      if (deleteModal.id === 'ALL') {
+      if (deleteId === 'ALL') {
         const batch = writeBatch(db);
         const q = query(collection(db, 'inventory'), where('userId', '==', targetUserId));
         const snapshot = await getDocs(q);
+        
+        if (snapshot.empty) {
+          showToast('Nenhum registro para apagar');
+          return;
+        }
+
         snapshot.docs.forEach((doc) => batch.delete(doc.ref));
         await batch.commit();
-        showToast('Histórico limpo com sucesso');
+        showToast('Todo o histórico foi apagado');
       } else {
-        await deleteDoc(doc(db, 'inventory', deleteModal.id));
-        showToast('Registro excluído');
-        if (editingId === deleteModal.id) {
+        await deleteDoc(doc(db, 'inventory', deleteId));
+        showToast('Registro excluído com sucesso');
+        
+        if (editingId === deleteId) {
           setCurrentView(AppView.HOME);
           setEditingId(null);
         }
       }
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, 'inventory');
+    } catch (error: any) {
+      console.error("Delete Error:", error);
+      
+      let msg = 'Erro ao excluir registro';
+      if (error.code === 'permission-denied') {
+        msg = 'Permissão negada para excluir este item.';
+      } else if (error.message && error.message.includes('insufficient permissions')) {
+        msg = 'Erro de permissão no banco de dados.';
+      }
+      
+      showToast(msg, 'error');
+      // We don't re-throw here to prevent crashing the app
     }
-    setDeleteModal({ isOpen: false, id: '' });
   };
 
   const handleAddCustomSize = () => {

@@ -76,7 +76,7 @@ service cloud.firestore {
           incoming().diff(existing()).affectedKeys().hasOnly(['productType', 'model', 'brand', 'color', 'arrivalMonth', 'arrivalYear', 'gridType', 'sizes', 'total'])
         );
         
-      allow delete: if existing().userId.startsWith('device_') || existing().userId == 'guest' || (isSignedIn() && existing().userId == request.auth.uid);
+      allow delete: if (resource.data.userId == 'guest') || (resource.data.userId >= 'device_' && resource.data.userId < 'device_~') || (isSignedIn() && resource.data.userId == request.auth.uid);
     }
 
     match /users/{userId} {
