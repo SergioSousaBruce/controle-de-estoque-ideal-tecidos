@@ -25,7 +25,10 @@ import {
   AlertTriangle,
   UploadCloud,
   Loader2,
-  ExternalLink
+  ExternalLink,
+  ClipboardList,
+  Eye,
+  Printer
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -66,6 +69,7 @@ import {
 } from 'firebase/firestore';
 import { AppView, InventoryCount, SizeGridType } from './types';
 import { PRODUCT_TYPES, LETTER_SIZES, NUMERIC_SIZES, MONTHS, YEARS } from './constants';
+import { DEFAULT_BRANDS_LIST } from './src/services/inventoryDb';
 
 const App: React.FC = () => {
   // Auth state
@@ -95,6 +99,7 @@ const App: React.FC = () => {
 
   // UI state
   const [currentView, setCurrentView] = useState<AppView>(AppView.HOME);
+  const [viewingPdfItem, setViewingPdfItem] = useState<InventoryCount | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [deleteModal, setDeleteModal] = useState<{ isOpen: boolean; id: string | 'ALL' }>({
     isOpen: false,
@@ -301,6 +306,23 @@ const App: React.FC = () => {
     setCurrentView(AppView.IDENTIFY);
   };
 
+  const handleStartWithSameBrand = (brand: string) => {
+    setFormData(prev => ({
+      productType: prev.productType || PRODUCT_TYPES[0],
+      model: '',
+      brand: brand,
+      color: '',
+      arrivalMonth: prev.arrivalMonth || (new Date().getMonth() + 1).toString().padStart(2, '0'),
+      arrivalYear: prev.arrivalYear || new Date().getFullYear().toString(),
+      gridType: prev.gridType || 'LETTER',
+      sizes: {},
+      total: 0
+    }));
+    setEditingId(null);
+    setAuthError(null);
+    setCurrentView(AppView.IDENTIFY);
+  };
+
   const handleEdit = (count: InventoryCount) => {
     setFormData({ ...count });
     setEditingId(count.id);
@@ -447,14 +469,15 @@ const App: React.FC = () => {
     updateSizeCount(size, current + delta);
   };
 
-  const saveInventory = async () => {
+  const saveInventory = async (): Promise<InventoryCount | null> => {
     // Sanitize data
-    const productType = (formData.productType || '').trim();
+    const productType = (formData.productType || 'Calçado').trim();
     const model = (formData.model || '').trim();
+    const brand = (formData.brand || '').trim();
 
-    if (!productType || !model) {
-      showToast('Preencha Produto e Modelo', 'error');
-      return;
+    if (!brand || !model) {
+      showToast('Preencha Marca e Modelo', 'error');
+      return null;
     }
 
     setIsSaving(true);
@@ -467,7 +490,8 @@ const App: React.FC = () => {
         ? counts.find(c => c.id === editingId)?.createdAt || Date.now() 
         : Date.now();
 
-      const finalCount = {
+      const finalCount: InventoryCount = {
+        id: itemDoc.id,
         productType,
         model,
         brand: (formData.brand || '').trim(),
@@ -484,21 +508,21 @@ const App: React.FC = () => {
       await setDoc(itemDoc, finalCount);
       showToast(editingId ? 'Registro atualizado' : 'Registro salvo com sucesso');
       setIsSaving(false);
-      return true;
+      return finalCount;
     } catch (error: any) {
       console.error("Save Error Details:", error);
       handleFirestoreError(error, OperationType.WRITE, 'inventory');
       
       let msg = 'Erro ao salvar no banco de dados';
       if (error.code === 'permission-denied') {
-        msg = 'Permissão negada. Verifique as regras do banco.';
+         msg = 'Permissão negada. Verifique as regras do banco.';
       } else if (error.message) {
-        msg = `Erro: ${error.message}`;
+         msg = `Erro: ${error.message}`;
       }
       
       showToast(msg, 'error');
       setIsSaving(false);
-      return false;
+      return null;
     }
   };
 
@@ -954,12 +978,12 @@ const App: React.FC = () => {
                               <button 
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  generateSinglePDF(item);
+                                  setViewingPdfItem(item);
                                 }}
                                 className="w-11 h-11 flex items-center justify-center bg-brand-slate text-brand-blue rounded-xl hover:bg-white hover:shadow-md transition-all active:scale-90"
-                                title="Baixar PDF"
+                                title="Visualizar Comprovante / PDF"
                               >
-                                <Download size={18} strokeWidth={2.5} />
+                                <FileText size={18} strokeWidth={2.5} />
                               </button>
                               <button 
                                 onClick={(e) => {
@@ -1059,31 +1083,31 @@ const App: React.FC = () => {
               <div className="bg-white p-8 rounded-[2.5rem] shadow-modern-lg space-y-6 border border-white relative overflow-hidden">
                 <div className="absolute top-0 right-0 w-32 h-32 bg-brand-slate rounded-full -mr-16 -mt-16 opacity-50"></div>
                 
-                {/* Category Selection with Quick Chips */}
+                {/* Brand Selection with Dropdown */}
                 <div className="space-y-2 relative z-10">
-                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2">Categoria de Produto</label>
+                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2">Marca</label>
                   <div className="relative group">
                     <select 
                       className="w-full p-5 bg-brand-slate border border-gray-100 focus:border-brand-accent focus:bg-white rounded-2xl focus:ring-0 focus:outline-none appearance-none font-display font-bold text-lg text-brand-dark transition-all pr-12"
-                      value={formData.productType && PRODUCT_TYPES.includes(formData.productType) ? formData.productType : (formData.productType === undefined || formData.productType === "" ? "" : "CUSTOM")}
+                      value={formData.brand && DEFAULT_BRANDS_LIST.includes(formData.brand) ? formData.brand : (formData.brand === undefined || formData.brand === "" ? "" : "CUSTOM")}
                       onChange={(e) => {
                         const val = e.target.value;
                         if (val === "CUSTOM") {
-                          setFormData(prev => ({ ...prev, productType: " " })); // Use space to indicate "typing"
+                          setFormData(prev => ({ ...prev, brand: " " })); // Use space to indicate "typing"
                         } else {
-                          setFormData(prev => ({ ...prev, productType: val }));
+                          setFormData(prev => ({ ...prev, brand: val }));
                         }
                       }}
                     >
-                      <option value="">Selecione...</option>
-                      {PRODUCT_TYPES.map(type => <option key={type} value={type}>{type}</option>)}
-                      <option value="CUSTOM">+ Nova Categoria (Digitar)...</option>
+                      <option value="">Selecione a Marca...</option>
+                      {DEFAULT_BRANDS_LIST.map(brandName => <option key={brandName} value={brandName}>{brandName}</option>)}
+                      <option value="CUSTOM">+ Outra Marca (Digitar)...</option>
                     </select>
                     <div className="absolute right-5 top-1/2 -translate-y-1/2 pointer-events-none text-brand-accent">
                       <LayoutGrid size={18} strokeWidth={2.5} />
                     </div>
                   </div>
-                  {(formData.productType !== undefined && formData.productType !== "" && !PRODUCT_TYPES.includes(formData.productType)) && (
+                  {(formData.brand !== undefined && formData.brand !== "" && !DEFAULT_BRANDS_LIST.includes(formData.brand)) && (
                     <motion.div
                       initial={{ opacity: 0, height: 0 }}
                       animate={{ opacity: 1, height: 'auto' }}
@@ -1091,15 +1115,15 @@ const App: React.FC = () => {
                     >
                       <input 
                         type="text" 
-                        placeholder="Digite o nome da categoria personalizada..."
+                        placeholder="Digite o nome da marca personalizada..."
                         className="w-full p-5 bg-white border-2 border-brand-accent/20 rounded-2xl focus:border-brand-accent focus:outline-none font-bold text-brand-dark shadow-inner text-lg"
-                        value={formData.productType === " " ? "" : formData.productType}
-                        onChange={(e) => setFormData(prev => ({ ...prev, productType: e.target.value }))}
+                        value={formData.brand === " " ? "" : formData.brand}
+                        onChange={(e) => setFormData(prev => ({ ...prev, brand: e.target.value }))}
                         autoFocus
                       />
                       <p className="text-[9px] font-black text-brand-accent uppercase tracking-[0.2em] mt-3 ml-3 flex items-center gap-2">
                         <PlusCircle size={12} />
-                        Nova Categoria Identificada
+                        Nova Marca Identificada
                       </p>
                     </motion.div>
                   )}
@@ -1116,27 +1140,15 @@ const App: React.FC = () => {
                   />
                 </div>
 
-                <div className="grid grid-cols-2 gap-4 relative z-10">
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2">Marca</label>
-                    <input 
-                      type="text"
-                      placeholder="Nike..."
-                      className="w-full p-5 bg-brand-slate border border-gray-100 focus:border-brand-accent focus:bg-white rounded-2xl focus:outline-none font-display font-bold text-lg text-brand-dark transition-all"
-                      value={formData.brand}
-                      onChange={(e) => setFormData(prev => ({ ...prev, brand: e.target.value }))}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2">Cor</label>
-                    <input 
-                      type="text"
-                      placeholder="Azul..."
-                      className="w-full p-5 bg-brand-slate border border-gray-100 focus:border-brand-accent focus:bg-white rounded-2xl focus:outline-none font-display font-bold text-lg text-brand-dark transition-all"
-                      value={formData.color}
-                      onChange={(e) => setFormData(prev => ({ ...prev, color: e.target.value }))}
-                    />
-                  </div>
+                <div className="space-y-2 relative z-10">
+                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2">Cor</label>
+                  <input 
+                    type="text"
+                    placeholder="Ex: Azul, Preto..."
+                    className="w-full p-5 bg-brand-slate border border-gray-100 focus:border-brand-accent focus:bg-white rounded-2xl focus:outline-none font-display font-bold text-lg text-brand-dark transition-all"
+                    value={formData.color}
+                    onChange={(e) => setFormData(prev => ({ ...prev, color: e.target.value }))}
+                  />
                 </div>
 
                 <div className="grid grid-cols-2 gap-4 relative z-10">
@@ -1182,7 +1194,7 @@ const App: React.FC = () => {
 
                   <motion.button 
                     whileTap={{ scale: 0.98 }}
-                    disabled={!formData.productType || !formData.model}
+                    disabled={!formData.brand || !formData.model}
                     onClick={() => {
                       setCurrentView(AppView.COUNT);
                       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -1332,7 +1344,53 @@ const App: React.FC = () => {
                 </div>
 
                 <div className="flex flex-col gap-3 relative z-10 w-full">
-                  <div className="flex gap-3">
+                  {/* Option 1: Save & Continue with same brand */}
+                  <motion.button 
+                    whileHover={{ scale: 1.01 }}
+                    whileTap={{ scale: 0.99 }}
+                    disabled={isSaving}
+                    onClick={async () => {
+                      const currentBrand = formData.brand || '';
+                      const success = await saveInventory();
+                      if (success) {
+                        handleStartWithSameBrand(currentBrand);
+                        showToast(`Salvo! Continuando na marca ${currentBrand}`);
+                      }
+                    }}
+                    className="w-full bg-brand-red hover:brightness-110 shadow-xl shadow-brand-red/20 text-white py-5 rounded-[1.5rem] active:scale-[0.98] transition-all flex items-center justify-center gap-3 disabled:opacity-50 font-display"
+                  >
+                    {isSaving ? (
+                      <Loader2 size={20} className="animate-spin" />
+                    ) : (
+                      <TrendingUp size={20} strokeWidth={3} />
+                    )}
+                    <span className="text-xs font-black uppercase tracking-[0.15em]">
+                      {isSaving ? 'Salvando...' : `Salvar e Continuar na marca ${formData.brand || ''}`}
+                    </span>
+                  </motion.button>
+
+                  {/* Option 2: Save & Select Other Brands */}
+                  <motion.button 
+                    whileHover={{ scale: 1.01 }}
+                    whileTap={{ scale: 0.99 }}
+                    disabled={isSaving}
+                    onClick={async () => {
+                      const success = await saveInventory();
+                      if (success) {
+                        handleStartNew();
+                        showToast('Salvo! Selecione uma nova marca');
+                      }
+                    }}
+                    className="w-full bg-brand-blue hover:brightness-110 shadow-xl shadow-brand-blue/20 text-white py-5 rounded-[1.5rem] active:scale-[0.98] transition-all flex items-center justify-center gap-3 disabled:opacity-50 font-display"
+                  >
+                    <PlusCircle size={20} strokeWidth={3} />
+                    <span className="text-xs font-black uppercase tracking-[0.15em]">
+                      Salvar e Selecionar Outra Marca
+                    </span>
+                  </motion.button>
+
+                  <div className="grid grid-cols-2 gap-3 mt-1">
+                    {/* Option 3: Save & Go Home */}
                     <motion.button 
                       whileHover={{ scale: 1.02 }}
                       whileTap={{ scale: 0.98 }}
@@ -1344,16 +1402,13 @@ const App: React.FC = () => {
                           window.scrollTo({ top: 0, behavior: 'smooth' });
                         }
                       }}
-                      className="flex-1 bg-brand-red hover:brightness-110 shadow-xl shadow-brand-red/20 text-white py-5 rounded-[1.5rem] active:scale-[0.98] transition-all flex items-center justify-center gap-2 group/btn disabled:opacity-50"
+                      className="bg-white/10 hover:bg-white/20 text-white py-4 rounded-[1.2rem] border border-white/10 active:scale-[0.98] transition-all flex items-center justify-center gap-2 disabled:opacity-50"
                     >
-                      {isSaving ? (
-                        <Loader2 size={20} className="animate-spin" />
-                      ) : (
-                        <Save size={20} strokeWidth={3} className="group-hover/btn:scale-110 transition-transform" />
-                      )}
-                      <span className="text-[10px] font-black uppercase tracking-[0.1em]">{isSaving ? 'Salvando...' : 'Salvar'}</span>
+                      <Home size={16} strokeWidth={2.5} />
+                      <span className="text-[10px] font-black uppercase tracking-[0.08em] text-center">Ir para o Início</span>
                     </motion.button>
-                    
+
+                    {/* Option 4: Save & View Receipt */}
                     <motion.button 
                       whileHover={{ scale: 1.02 }}
                       whileTap={{ scale: 0.98 }}
@@ -1361,34 +1416,17 @@ const App: React.FC = () => {
                       onClick={async () => {
                         const success = await saveInventory();
                         if (success) {
-                          handleStartNew();
+                          setCurrentView(AppView.HOME);
+                          setViewingPdfItem(success); // Immediately open visualizer
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
                         }
                       }}
-                      className="flex-1 bg-white/10 hover:bg-white/20 text-white py-5 rounded-[1.5rem] border border-white/10 active:scale-[0.98] transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                      className="bg-white/10 hover:bg-white/20 text-white py-4 rounded-[1.2rem] border border-white/10 active:scale-[0.98] transition-all flex items-center justify-center gap-2 disabled:opacity-50"
                     >
-                      <Plus size={20} strokeWidth={3} />
-                      <span className="text-[10px] font-black uppercase tracking-[0.1em] leading-tight text-center">Salvar & Novo</span>
+                      <Eye size={16} strokeWidth={2.5} />
+                      <span className="text-[10px] font-black uppercase tracking-[0.08em] text-center">Ver Comprovante</span>
                     </motion.button>
                   </div>
-
-                  <motion.button 
-                    whileHover={{ scale: 1.01 }}
-                    whileTap={{ scale: 0.99 }}
-                    disabled={isSaving}
-                    onClick={async () => {
-                      const success = await saveInventory();
-                      if (success) {
-                        generateSinglePDF(formData as InventoryCount);
-                        showToast('PDF Gerado e Histórico Atualizado!');
-                        setCurrentView(AppView.HOME);
-                        window.scrollTo({ top: 0, behavior: 'smooth' });
-                      }
-                    }}
-                    className="w-full bg-brand-blue hover:brightness-110 shadow-xl shadow-brand-blue/20 text-white py-5 rounded-[1.5rem] active:scale-[0.98] transition-all flex items-center justify-center gap-3 disabled:opacity-50"
-                  >
-                    <Download size={20} strokeWidth={3} />
-                    <span className="text-xs font-black uppercase tracking-[0.2em]">Salvar & Baixar PDF</span>
-                  </motion.button>
                 </div>
               </div>
             </motion.div>
@@ -1657,31 +1695,31 @@ const App: React.FC = () => {
         </p>
       </footer>
 
-      {/* FIXED FOOTER NAVIGATION (No Print) */}
+       {/* FIXED FOOTER NAVIGATION (No Print) */}
       <nav className="no-print fixed bottom-0 left-0 right-0 max-w-lg mx-auto p-4 z-50">
-        <div className="bg-brand-blue/95 backdrop-blur-xl rounded-[2.5rem] p-2 flex gap-2 shadow-2xl shadow-brand-blue/40 border border-white/10">
+        <div className="bg-brand-blue/95 backdrop-blur-xl rounded-[2.5rem] p-2 flex gap-1.5 shadow-2xl shadow-brand-blue/40 border border-white/10">
           <button 
             onClick={() => setCurrentView(AppView.HOME)}
             className={`flex-1 flex items-center justify-center gap-2 py-4 rounded-[1.8rem] transition-all duration-500 ${currentView === AppView.HOME ? 'bg-white text-brand-blue shadow-xl' : 'text-white/40 hover:text-white'}`}
           >
-            <Home size={20} fill={currentView === AppView.HOME ? "currentColor" : "none"} />
-            <span className="text-[10px] font-black uppercase tracking-widest leading-none">Início</span>
+            <Home size={18} fill={currentView === AppView.HOME ? "currentColor" : "none"} />
+            <span className="text-[9px] font-black uppercase tracking-wider leading-none">Início</span>
           </button>
           
           <button 
             onClick={() => setCurrentView(AppView.ANALYTICS)}
             className={`flex-1 flex items-center justify-center gap-2 py-4 rounded-[1.8rem] transition-all duration-500 ${currentView === AppView.ANALYTICS ? 'bg-white text-brand-blue shadow-xl' : 'text-white/40 hover:text-white'}`}
           >
-            <BrainCircuit size={20} />
-            <span className="text-[10px] font-black uppercase tracking-widest leading-none">Análise</span>
+            <BrainCircuit size={18} />
+            <span className="text-[9px] font-black uppercase tracking-wider leading-none">Análise</span>
           </button>
 
           <button 
             onClick={generatePDF}
             className="flex-1 flex items-center justify-center gap-2 py-4 rounded-[1.8rem] text-white/40 hover:text-white hover:bg-white/5 transition-all duration-300"
           >
-            <Download size={20} />
-            <span className="text-[10px] font-black uppercase tracking-widest leading-none">PDF</span>
+            <Download size={18} />
+            <span className="text-[9px] font-black uppercase tracking-wider leading-none">PDF</span>
           </button>
         </div>
       </nav>
@@ -1811,6 +1849,199 @@ const App: React.FC = () => {
                   className="flex-1 py-4 bg-brand-red text-white rounded-2xl font-black uppercase text-xs tracking-widest shadow-lg shadow-brand-red/20 active:scale-95 transition-all"
                 >
                   Excluir
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* COMPROVANTE / PDF PREVIEW MODAL */}
+      <AnimatePresence>
+        {viewingPdfItem && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md overflow-y-auto"
+          >
+            <motion.div 
+              initial={{ scale: 0.95, y: 15 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.95, y: 15 }}
+              className="bg-white rounded-[2.5rem] w-full max-w-lg shadow-2xl overflow-hidden flex flex-col my-8 max-h-[90vh] border border-gray-100 text-brand-dark"
+            >
+              {/* Paper Top Decorative Header */}
+              <div className="bg-brand-red p-4 text-center text-white flex items-center justify-center gap-2">
+                <Package size={16} />
+                <span className="text-[10px] font-black uppercase tracking-[0.25em]">Comprovante de Contagem - Ideal Tecidos</span>
+              </div>
+
+              {/* Receipt Area (Scrollable if needed, paper-styled) */}
+              <div className="p-8 space-y-6 overflow-y-auto flex-1 bg-gradient-to-b from-white to-brand-slate/10">
+                <div className="text-center space-y-1">
+                  <h3 className="text-3xl font-display font-black text-brand-red tracking-tight leading-none">IDEAL TECIDOS</h3>
+                  <p className="text-[10px] font-black text-brand-blue uppercase tracking-widest">Controle de Estoque • Comprovante</p>
+                  <p className="text-[9px] text-gray-400 font-bold uppercase">Gerado em {new Date(viewingPdfItem.createdAt).toLocaleString('pt-BR')}</p>
+                </div>
+
+                {/* Meta details grid */}
+                <div className="bg-white border border-gray-100 rounded-2xl p-5 space-y-3.5 shadow-sm">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <span className="text-[9px] font-black text-gray-400 uppercase tracking-wider block mb-0.5">Produto</span>
+                      <span className="text-sm font-bold text-brand-dark uppercase block truncate">{viewingPdfItem.productType || '-'}</span>
+                    </div>
+                    <div>
+                      <span className="text-[9px] font-black text-gray-400 uppercase tracking-wider block mb-0.5">Marca</span>
+                      <span className="text-sm font-bold text-brand-dark uppercase block truncate">{viewingPdfItem.brand || '-'}</span>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4 border-t border-dashed border-gray-100 pt-3.5">
+                    <div>
+                      <span className="text-[9px] font-black text-gray-400 uppercase tracking-wider block mb-0.5">Modelo</span>
+                      <span className="text-sm font-bold text-brand-dark uppercase block truncate">{viewingPdfItem.model || '-'}</span>
+                    </div>
+                    <div>
+                      <span className="text-[9px] font-black text-gray-400 uppercase tracking-wider block mb-0.5">Cor</span>
+                      <span className="text-sm font-bold text-brand-dark uppercase block truncate">{viewingPdfItem.color || '-'}</span>
+                    </div>
+                  </div>
+
+                  {(viewingPdfItem.arrivalMonth || viewingPdfItem.arrivalYear) && (
+                    <div className="border-t border-dashed border-gray-100 pt-3.5">
+                      <span className="text-[9px] font-black text-gray-400 uppercase tracking-wider block mb-0.5">Mês/Ano de Chegada</span>
+                      <span className="text-sm font-bold text-brand-red flex items-center gap-1.5 uppercase">
+                        <TrendingUp size={12} />
+                        {viewingPdfItem.arrivalMonth || '--'}/{viewingPdfItem.arrivalYear || '--'}
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Table of sizes */}
+                <div className="space-y-3">
+                  <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Grade de Tamanhos</span>
+                  
+                  <div className="bg-white border border-gray-100 rounded-2xl overflow-hidden shadow-sm">
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="bg-brand-blue/5 text-[9px] font-black uppercase tracking-wider text-brand-blue border-b border-gray-100">
+                          <th className="p-4 text-center">Tamanho</th>
+                          <th className="p-4 text-center">Quantidade Contada</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {Object.entries(viewingPdfItem.sizes)
+                          .filter(([_, qty]) => (qty as any) > 0)
+                          .map(([size, qty]) => (
+                            <tr key={size} className="border-b border-gray-50 last:border-0 hover:bg-brand-slate/30 transition-colors">
+                              <td className="p-4 text-center text-sm font-black text-brand-accent">{size}</td>
+                              <td className="p-4 text-center text-sm font-black text-brand-dark">{qty} pares</td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Total badge */}
+                <div className="bg-brand-blue text-white rounded-2xl p-5 flex items-center justify-between shadow-lg">
+                  <div className="space-y-0.5">
+                    <span className="text-[9px] font-black text-white/40 uppercase tracking-widest block">Total Geral de Peças</span>
+                    <span className="text-xs font-bold text-white/70">Quantidade total contada neste lote</span>
+                  </div>
+                  <span className="text-4xl font-display font-black tracking-tight">{viewingPdfItem.total}</span>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="p-6 bg-brand-slate border-t border-gray-100 flex flex-col gap-3">
+                <div className="flex gap-3">
+                  <button 
+                    onClick={() => {
+                      generateSinglePDF(viewingPdfItem);
+                      showToast('PDF baixado com sucesso!');
+                    }}
+                    className="flex-1 py-4 bg-brand-red text-white hover:brightness-110 rounded-2xl font-black uppercase text-xs tracking-widest shadow-lg shadow-brand-red/20 active:scale-95 transition-all flex items-center justify-center gap-2"
+                  >
+                    <Download size={16} />
+                    Baixar PDF
+                  </button>
+                  
+                  <button 
+                    onClick={() => {
+                      const doc = new jsPDF();
+                      const dateStr = new Date(viewingPdfItem.createdAt).toLocaleDateString('pt-BR');
+                      const timeStr = new Date(viewingPdfItem.createdAt).toLocaleTimeString('pt-BR');
+                      doc.setFillColor(192, 36, 40);
+                      doc.rect(0, 0, 210, 15, 'F');
+                      doc.setFontSize(22);
+                      doc.setTextColor(192, 36, 40);
+                      doc.setFont(undefined, 'bold');
+                      doc.text('IDEAL TECIDOS', 14, 30);
+                      doc.setFontSize(10);
+                      doc.setTextColor(29, 43, 91);
+                      doc.text('CONTROLE DE ESTOQUE - COMPROVANTE', 14, 36);
+                      doc.setDrawColor(230, 230, 230);
+                      doc.roundedRect(14, 45, 182, 30, 3, 3, 'FD');
+                      doc.setFontSize(9);
+                      doc.setTextColor(100, 100, 100);
+                      doc.text('PRODUTO:', 20, 53);
+                      doc.text('MODELO:', 20, 60);
+                      doc.text('MARCA/COR:', 20, 67);
+                      doc.setTextColor(29, 43, 91);
+                      doc.text(viewingPdfItem.productType?.toUpperCase() || '-', 45, 53);
+                      doc.text(viewingPdfItem.model?.toUpperCase() || '-', 45, 60);
+                      doc.text(`${viewingPdfItem.brand || '-'} / ${viewingPdfItem.color || '-'}`, 45, 67);
+                      doc.setTextColor(100, 100, 100);
+                      doc.text('DATA:', 130, 53);
+                      doc.text('CHEGADA:', 130, 60);
+                      doc.text('TOTAL:', 130, 67);
+                      doc.setTextColor(29, 43, 91);
+                      doc.text(dateStr, 150, 53);
+                      doc.text(`${viewingPdfItem.arrivalMonth || '--'}/${viewingPdfItem.arrivalYear || '--'}`, 150, 60);
+                      doc.setFontSize(11);
+                      doc.setTextColor(192, 36, 40);
+                      doc.text(viewingPdfItem.total?.toString() || '0', 150, 67);
+                      const tableRows = Object.entries(viewingPdfItem.sizes)
+                        .filter(([_, qty]) => (qty as any) > 0)
+                        .map(([size, qty]) => [size, qty.toString()]);
+                      autoTable(doc, {
+                        startY: 85,
+                        head: [['Tamanho', 'Quantidade']],
+                        body: tableRows,
+                        theme: 'grid',
+                        headStyles: { fillColor: [29, 43, 91], textColor: [255, 255, 255], fontSize: 10, fontStyle: 'bold', halign: 'center' },
+                        columnStyles: { 0: { halign: 'center', fontStyle: 'bold', cellWidth: 40 }, 1: { halign: 'center', fontSize: 12, fontStyle: 'bold' } },
+                        margin: { left: 40, right: 40 }
+                      });
+                      doc.setFontSize(8);
+                      doc.setTextColor(150, 150, 150);
+                      doc.text(`Documento emitido via Ideal Tecidos - Controle de Estoque em ${dateStr} ${timeStr}`, 14, doc.internal.pageSize.getHeight() - 10);
+                      
+                      const blobUrl = doc.output('bloburl');
+                      const printWindow = window.open(blobUrl, '_blank');
+                      if (printWindow) {
+                        printWindow.onload = () => {
+                          printWindow.print();
+                        };
+                      }
+                      showToast('Impressora iniciada!');
+                    }}
+                    className="flex-1 py-4 bg-brand-blue text-white hover:brightness-110 rounded-2xl font-black uppercase text-xs tracking-widest shadow-lg shadow-brand-blue/20 active:scale-95 transition-all flex items-center justify-center gap-2"
+                  >
+                    <Printer size={16} />
+                    Imprimir
+                  </button>
+                </div>
+
+                <button 
+                  onClick={() => setViewingPdfItem(null)}
+                  className="w-full py-4 bg-gray-100 hover:bg-gray-200 text-gray-500 rounded-2xl font-black uppercase text-xs tracking-widest active:scale-95 transition-all"
+                >
+                  Fechar sem baixar
                 </button>
               </div>
             </motion.div>

@@ -31,23 +31,23 @@ service cloud.firestore {
     
     function isValidInventoryCount(data) {
       return data.keys().hasAll(['productType', 'model', 'gridType', 'sizes', 'total', 'createdAt', 'userId'])
-        && data.productType is string && data.productType.size() <= 100
-        && data.model is string && data.model.size() <= 100
+        && data.productType is string
+        && data.model is string
         && data.gridType in ['LETTER', 'NUMERIC']
         && data.sizes is map
         && data.total is number && data.total >= 0
-        && data.createdAt is int
-        && (data.userId >= 'device_' && data.userId < 'device_~' || data.userId == 'guest' || (request.auth != null && data.userId == request.auth.uid))
-        && (!data.keys().contains('arrivalMonth') || (data.arrivalMonth is string && data.arrivalMonth.size() <= 2))
-        && (!data.keys().contains('arrivalYear') || (data.arrivalYear is string && data.arrivalYear.size() <= 4))
-        && (!data.keys().contains('brand') || (data.brand is string && data.brand.size() <= 100))
-        && (!data.keys().contains('color') || (data.color is string && data.color.size() <= 100));
+        && data.createdAt is number
+        && (data.userId.matches('^device_.*') || data.userId == 'guest' || (request.auth != null && data.userId == request.auth.uid))
+        && (!data.keys().contains('arrivalMonth') || data.arrivalMonth is string)
+        && (!data.keys().contains('arrivalYear') || data.arrivalYear is string)
+        && (!data.keys().contains('brand') || data.brand is string)
+        && (!data.keys().contains('color') || data.color is string);
     }
 
     function isValidUser(data) {
       return data.keys().hasAll(['uid', 'email'])
         && data.uid == request.auth.uid
-        && data.email is string && data.email.size() <= 200;
+        && data.email is string;
     }
 
     // --- Collections ---
@@ -57,17 +57,14 @@ service cloud.firestore {
     }
 
     match /inventory/{countId} {
-      allow read: if 
-        (resource.data.userId == 'guest') || 
-        (resource.data.userId >= 'device_' && resource.data.userId < 'device_~') ||
-        (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow read: if true;
       
-      allow create: if (incoming().userId == 'guest' || (incoming().userId >= 'device_' && incoming().userId < 'device_~') || isSignedIn())
+      allow create: if (incoming().userId == 'guest' || incoming().userId.matches('^device_.*') || isSignedIn())
         && isValidId(countId) 
         && isValidInventoryCount(incoming())
-        && incoming().createdAt is int;
+        && incoming().createdAt is number;
       
-      allow update: if (incoming().userId == 'guest' || (incoming().userId >= 'device_' && incoming().userId < 'device_~') || (isSignedIn() && incoming().userId == request.auth.uid))
+      allow update: if (incoming().userId == 'guest' || incoming().userId.matches('^device_.*') || (isSignedIn() && incoming().userId == request.auth.uid))
         && isValidInventoryCount(incoming())
         && incoming().userId == existing().userId
         && incoming().createdAt == existing().createdAt
@@ -76,12 +73,16 @@ service cloud.firestore {
           incoming().diff(existing()).affectedKeys().hasOnly(['productType', 'model', 'brand', 'color', 'arrivalMonth', 'arrivalYear', 'gridType', 'sizes', 'total'])
         );
         
-      allow delete: if (resource.data.userId == 'guest') || (resource.data.userId >= 'device_' && resource.data.userId < 'device_~') || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow delete: if true;
     }
 
     match /users/{userId} {
-      allow get: if isOwner(userId);
-      allow create, update: if isOwner(userId) && isValidUser(incoming());
+      allow get: if isOwner(userId) || (userId is string && userId.matches('^device_.*'));
+      allow create, update: if (isOwner(userId) && isValidUser(incoming())) || (userId is string && userId.matches('^device_.*'));
+      
+      match /{allPaths=**} {
+        allow read, write: if isOwner(userId) || (userId is string && userId.matches('^device_.*'));
+      }
     }
   }
 }
