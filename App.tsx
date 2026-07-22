@@ -112,6 +112,12 @@ const App: React.FC = () => {
   
   const [newSizeInput, setNewSizeInput] = useState('');
   
+  // Brand inventory statuses state
+  const [completedBrands, setCompletedBrands] = useState<Record<string, boolean>>({});
+  const [brandSearchTerm, setBrandSearchTerm] = useState('');
+  const [brandStatusFilter, setBrandStatusFilter] = useState<'ALL' | 'COMPLETED' | 'IN_PROGRESS' | 'PENDING'>('ALL');
+  const [expandedBrand, setExpandedBrand] = useState<string | null>(null);
+  
   // AI State
   const [aiReport, setAiReport] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -124,6 +130,73 @@ const App: React.FC = () => {
     setToast({ message, type });
     setTimeout(() => setToast({ message: '', type: null }), 3000);
   };
+
+  // Firestore sync for brand statuses
+  useEffect(() => {
+    if (!currentUserId) return;
+    const docRef = doc(db, 'users', currentUserId, 'settings', 'brand_statuses');
+    const unsub = onSnapshot(docRef, (docSnap) => {
+      if (docSnap.exists()) {
+        setCompletedBrands(docSnap.data().completed || {});
+      }
+    }, (err) => {
+      console.warn("Brand statuses load notice:", err);
+    });
+    return () => unsub();
+  }, [currentUserId]);
+
+  const toggleBrandCompleted = async (brandName: string, forceStatus?: boolean) => {
+    if (!brandName) return;
+    const cleanBrand = brandName.trim();
+    if (!cleanBrand) return;
+
+    const newStatus = forceStatus !== undefined ? forceStatus : !completedBrands[cleanBrand];
+    const updated = { ...completedBrands, [cleanBrand]: newStatus };
+    setCompletedBrands(updated);
+
+    if (currentUserId) {
+      try {
+        const docRef = doc(db, 'users', currentUserId, 'settings', 'brand_statuses');
+        await setDoc(docRef, { completed: updated }, { merge: true });
+      } catch (err) {
+        console.error("Error saving brand status to Firestore:", err);
+      }
+    }
+  };
+
+  // Real-time Brand Statistics
+  const allBrandsList = useMemo(() => {
+    const customFromCounts = counts.map(c => c.brand?.trim()).filter(Boolean) as string[];
+    const set = new Set([...DEFAULT_BRANDS_LIST, ...customFromCounts]);
+    return Array.from(set).sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  }, [counts]);
+
+  const brandStats = useMemo(() => {
+    return allBrandsList.map(brandName => {
+      const brandCounts = counts.filter(c => (c.brand || '').toLowerCase().trim() === brandName.toLowerCase().trim());
+      const totalPieces = brandCounts.reduce((acc, c) => acc + c.total, 0);
+      const totalModels = new Set(brandCounts.map(c => c.model)).size;
+      const isCompleted = !!completedBrands[brandName];
+      const isStarted = totalPieces > 0;
+
+      let status: 'COMPLETED' | 'IN_PROGRESS' | 'PENDING' = 'PENDING';
+      if (isCompleted) status = 'COMPLETED';
+      else if (isStarted) status = 'IN_PROGRESS';
+
+      return {
+        name: brandName,
+        totalPieces,
+        totalModels,
+        totalLots: brandCounts.length,
+        status,
+        items: brandCounts
+      };
+    });
+  }, [allBrandsList, counts, completedBrands]);
+
+  const completedCount = useMemo(() => brandStats.filter(b => b.status === 'COMPLETED').length, [brandStats]);
+  const inProgressCount = useMemo(() => brandStats.filter(b => b.status === 'IN_PROGRESS').length, [brandStats]);
+  const pendingCount = useMemo(() => brandStats.filter(b => b.status === 'PENDING').length, [brandStats]);
   
   // Form state
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -136,7 +209,8 @@ const App: React.FC = () => {
     arrivalYear: '',
     gridType: 'LETTER',
     sizes: {},
-    total: 0
+    total: 0,
+    gender: ''
   });
 
   // Auth effect
@@ -291,7 +365,7 @@ const App: React.FC = () => {
   // Handlers
   const handleStartNew = () => {
     setFormData({
-      productType: PRODUCT_TYPES[0],
+      productType: '',
       model: '',
       brand: '',
       color: '',
@@ -299,7 +373,8 @@ const App: React.FC = () => {
       arrivalYear: new Date().getFullYear().toString(),
       gridType: 'LETTER',
       sizes: {},
-      total: 0
+      total: 0,
+      gender: 'M'
     });
     setEditingId(null);
     setAuthError(null);
@@ -308,7 +383,7 @@ const App: React.FC = () => {
 
   const handleStartWithSameBrand = (brand: string) => {
     setFormData(prev => ({
-      productType: prev.productType || PRODUCT_TYPES[0],
+      productType: prev.productType || '',
       model: '',
       brand: brand,
       color: '',
@@ -316,7 +391,8 @@ const App: React.FC = () => {
       arrivalYear: prev.arrivalYear || new Date().getFullYear().toString(),
       gridType: prev.gridType || 'LETTER',
       sizes: {},
-      total: 0
+      total: 0,
+      gender: 'M'
     }));
     setEditingId(null);
     setAuthError(null);
@@ -502,7 +578,8 @@ const App: React.FC = () => {
         sizes: formData.sizes as Record<string, number>,
         total: formData.total || 0,
         createdAt,
-        userId: currentUserId
+        userId: currentUserId,
+        gender: formData.gender || ''
       };
 
       await setDoc(itemDoc, finalCount);
@@ -560,7 +637,8 @@ const App: React.FC = () => {
 
     doc.setTextColor(29, 43, 91);
     doc.text(item.productType?.toUpperCase() || '-', 45, 53);
-    doc.text(item.model?.toUpperCase() || '-', 45, 60);
+    const modelWithGender = (item.model || '').toUpperCase() + (item.gender ? ` (${item.gender})` : '');
+    doc.text(modelWithGender || '-', 45, 60);
     doc.text(`${item.brand || '-'} / ${item.color || '-'}`, 45, 67);
 
     doc.setTextColor(100, 100, 100);
@@ -646,7 +724,7 @@ const App: React.FC = () => {
       return [
         new Date(item.createdAt).toLocaleDateString('pt-BR'),
         item.productType,
-        item.model,
+        item.model + (item.gender ? ` (${item.gender})` : ''),
         item.brand || '',
         item.color || '',
         `${item.arrivalMonth || ''}${item.arrivalMonth && item.arrivalYear ? '/' : ''}${item.arrivalYear || ''}`,
@@ -877,6 +955,42 @@ const App: React.FC = () => {
                 </motion.div>
               </div>
 
+              {/* Real-Time Brand Inventory Widget */}
+              <motion.div 
+                whileHover={{ y: -2 }}
+                onClick={() => setCurrentView(AppView.INVENTORIES)}
+                className="bg-gradient-to-br from-brand-dark via-[#1a254c] to-brand-blue text-white p-6 rounded-[2.5rem] shadow-modern-lg cursor-pointer space-y-4 border border-white/10 group relative overflow-hidden"
+              >
+                <div className="flex items-center justify-between relative z-10">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-2xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center">
+                      <CheckCircle2 size={22} strokeWidth={2.5} />
+                    </div>
+                    <div>
+                      <h3 className="font-display font-black text-sm uppercase tracking-wider text-white">Inventário de Marcas em Tempo Real</h3>
+                      <p className="text-[10px] text-emerald-400 font-bold uppercase tracking-widest flex items-center gap-1 mt-0.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                        {completedCount} de {allBrandsList.length} marcas concluídas
+                      </p>
+                    </div>
+                  </div>
+                  <ChevronLeft size={20} className="rotate-180 text-white/40 group-hover:text-white transition-colors" />
+                </div>
+
+                <div className="space-y-1.5 relative z-10">
+                  <div className="w-full bg-white/10 h-3 rounded-full overflow-hidden p-0.5 border border-white/10">
+                    <div 
+                      className="bg-gradient-to-r from-emerald-400 to-teal-300 h-full rounded-full transition-all duration-500"
+                      style={{ width: `${Math.min(100, Math.max(3, (completedCount / (allBrandsList.length || 1)) * 100))}%` }}
+                    ></div>
+                  </div>
+                  <div className="flex justify-between items-center text-[9px] font-black uppercase text-white/60 tracking-wider">
+                    <span>{inProgressCount} marcas em contagem</span>
+                    <span className="text-emerald-300 font-black">Ver Inventário Completo →</span>
+                  </div>
+                </div>
+              </motion.div>
+
               <div className="flex flex-col gap-5">
                 <motion.button 
                   whileTap={{ scale: 0.98 }}
@@ -1010,8 +1124,18 @@ const App: React.FC = () => {
 
                           {/* Middle row: Model and Info */}
                           <div className="space-y-1">
-                            <h3 className="font-display font-black text-brand-dark text-2xl leading-tight tracking-tight uppercase">
-                              {item.model}
+                            <h3 className="font-display font-black text-brand-dark text-2xl leading-tight tracking-tight uppercase flex flex-wrap items-center gap-2">
+                              <span>{item.model}</span>
+                              {item.gender && (
+                                <span className={`text-[10px] px-2.5 py-0.5 rounded-full font-black uppercase tracking-wider ${
+                                  item.gender === 'M' ? 'bg-blue-50 text-blue-600 border border-blue-100' :
+                                  item.gender === 'F' ? 'bg-pink-50 text-pink-600 border border-pink-100' :
+                                  item.gender === 'IM' ? 'bg-indigo-50 text-indigo-600 border border-indigo-100' :
+                                  'bg-purple-50 text-purple-600 border border-purple-100'
+                                }`}>
+                                  {item.gender === 'M' ? 'Masc' : item.gender === 'F' ? 'Fem' : item.gender === 'IM' ? 'Inf.M' : 'Inf.F'}
+                                </span>
+                              )}
                             </h3>
                             <div className="flex flex-wrap items-center gap-2 text-xs font-bold text-gray-400 uppercase tracking-wider">
                               {item.brand && <span>{item.brand}</span>}
@@ -1062,26 +1186,13 @@ const App: React.FC = () => {
           {currentView === AppView.IDENTIFY && (
             <motion.div 
               key="identify"
-              initial={{ opacity: 0, x: 30 }}
+              initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -30 }}
+              exit={{ opacity: 0, x: -20 }}
               className="space-y-8"
             >
-              <div className="flex items-center gap-4 mb-4">
-                <button 
-                  onClick={() => setCurrentView(AppView.HOME)} 
-                  className="w-12 h-12 flex items-center justify-center bg-white rounded-2xl shadow-modern text-brand-blue active:scale-95 transition-all border border-gray-100"
-                >
-                  <ChevronLeft size={24} strokeWidth={3} />
-                </button>
-                <div>
-                  <h2 className="text-3xl font-display font-black text-brand-dark tracking-tighter">Identificação</h2>
-                  <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest leading-none mt-1">Passo 01: Dados do Lote</p>
-                </div>
-              </div>
-
-              <div className="bg-white p-8 rounded-[2.5rem] shadow-modern-lg space-y-6 border border-white relative overflow-hidden">
-                <div className="absolute top-0 right-0 w-32 h-32 bg-brand-slate rounded-full -mr-16 -mt-16 opacity-50"></div>
+              <div className="bg-white p-6 sm:p-8 rounded-[2.5rem] shadow-modern-lg space-y-6 border border-white relative overflow-hidden">
+                <div className="absolute top-0 right-0 w-32 h-32 bg-brand-slate rounded-full -mr-16 -mt-16 opacity-50 pointer-events-none"></div>
                 
                 {/* Brand Selection with Dropdown */}
                 <div className="space-y-2 relative z-10">
@@ -1129,26 +1240,71 @@ const App: React.FC = () => {
                   )}
                 </div>
 
+                {/* Público / Gênero Selection */}
                 <div className="space-y-2 relative z-10">
-                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2">Modelo</label>
-                  <input 
-                    type="text"
-                    placeholder="Ex: Sport..."
-                    className="w-full p-5 bg-brand-slate border border-gray-100 focus:border-brand-accent focus:bg-white rounded-2xl focus:outline-none font-display font-bold text-lg text-brand-dark transition-all"
-                    value={formData.model}
-                    onChange={(e) => setFormData(prev => ({ ...prev, model: e.target.value }))}
-                  />
+                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2">Público / Gênero</label>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-brand-slate p-2 rounded-2xl border border-gray-100">
+                    {[
+                      { id: 'M', code: 'M', label: 'Masculino', color: 'border-blue-500 bg-blue-50 text-blue-700' },
+                      { id: 'F', code: 'F', label: 'Feminino', color: 'border-pink-500 bg-pink-50 text-pink-700' },
+                      { id: 'IM', code: 'IM', label: 'Infantil Masc.', color: 'border-cyan-500 bg-cyan-50 text-cyan-700' },
+                      { id: 'IF', code: 'IF', label: 'Infantil Fem.', color: 'border-purple-500 bg-purple-50 text-purple-700' },
+                    ].map(opt => {
+                      const isSelected = formData.gender === opt.id;
+                      return (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => {
+                            const newGender = formData.gender === opt.id ? '' : opt.id;
+                            setFormData(prev => ({ 
+                              ...prev, 
+                              gender: newGender
+                            }));
+                          }}
+                          className={`p-3 rounded-xl transition-all flex items-center gap-2.5 text-left border ${
+                            isSelected 
+                              ? `bg-white shadow-md text-brand-dark ${opt.color.split(' ')[0]}` 
+                              : 'bg-white/70 hover:bg-white text-gray-500 border-transparent hover:border-gray-200'
+                          }`}
+                        >
+                          <span className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-black shrink-0 border ${
+                            isSelected ? opt.color : 'bg-gray-100 text-gray-600 border-gray-200'
+                          }`}>
+                            {opt.code}
+                          </span>
+                          <span className="text-xs font-black tracking-tight leading-none uppercase">
+                            {opt.label}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
 
-                <div className="space-y-2 relative z-10">
-                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2">Cor</label>
-                  <input 
-                    type="text"
-                    placeholder="Ex: Azul, Preto..."
-                    className="w-full p-5 bg-brand-slate border border-gray-100 focus:border-brand-accent focus:bg-white rounded-2xl focus:outline-none font-display font-bold text-lg text-brand-dark transition-all"
-                    value={formData.color}
-                    onChange={(e) => setFormData(prev => ({ ...prev, color: e.target.value }))}
-                  />
+                {/* Row: Modelo & Cor */}
+                <div className="grid grid-cols-1 md:grid-cols-12 gap-4 relative z-10">
+                  <div className="md:col-span-7 space-y-2">
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2">Modelo</label>
+                    <input 
+                      type="text"
+                      placeholder="Ex: Sport..."
+                      className="w-full p-5 bg-brand-slate border border-gray-100 focus:border-brand-accent focus:bg-white rounded-2xl focus:outline-none font-display font-bold text-lg text-brand-dark transition-all"
+                      value={formData.model}
+                      onChange={(e) => setFormData(prev => ({ ...prev, model: e.target.value }))}
+                    />
+                  </div>
+                  
+                  <div className="md:col-span-5 space-y-2">
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2">Cor</label>
+                    <input 
+                      type="text"
+                      placeholder="Ex: Azul, Preto..."
+                      className="w-full p-5 bg-brand-slate border border-gray-100 focus:border-brand-accent focus:bg-white rounded-2xl focus:outline-none font-display font-bold text-lg text-brand-dark transition-all"
+                      value={formData.color}
+                      onChange={(e) => setFormData(prev => ({ ...prev, color: e.target.value }))}
+                    />
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-4 relative z-10">
@@ -1212,32 +1368,50 @@ const App: React.FC = () => {
           {currentView === AppView.COUNT && (
             <motion.div 
               key="count"
-              initial={{ opacity: 0, x: 30 }}
+              initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -30 }}
+              exit={{ opacity: 0, x: -20 }}
               className="space-y-8"
             >
-              <div className="flex items-center gap-4 mb-4">
-                <button 
-                  onClick={() => setCurrentView(AppView.IDENTIFY)} 
-                  className="w-12 h-12 flex items-center justify-center bg-white rounded-2xl shadow-modern text-brand-blue active:scale-95 transition-all border border-gray-100"
-                >
-                  <ChevronLeft size={24} strokeWidth={3} />
-                </button>
-                <div>
-                  <h2 className="text-3xl font-display font-black text-brand-dark tracking-tighter leading-none mb-1 uppercase">Contagem</h2>
-                  <p className="text-[10px] text-brand-red uppercase font-black tracking-widest opacity-90">{formData.productType} • {formData.model}</p>
+              <div className="bg-white p-6 rounded-[2rem] shadow-modern border border-gray-50 space-y-6">
+                {/* Header Row */}
+                <div className="flex items-center gap-4 pb-4 border-b border-gray-100">
+                  <button 
+                    type="button"
+                    onClick={() => setCurrentView(AppView.IDENTIFY)} 
+                    className="w-11 h-11 flex items-center justify-center bg-brand-slate hover:bg-brand-blue/10 rounded-2xl text-brand-blue active:scale-95 transition-all border border-gray-100 shrink-0 shadow-sm"
+                  >
+                    <ChevronLeft size={22} strokeWidth={3} />
+                  </button>
+                  <div className="min-w-0 flex-1">
+                    <h2 className="text-xl sm:text-2xl font-display font-black text-brand-dark tracking-tighter leading-none mb-1 uppercase">Contagem</h2>
+                    <p className="text-[10px] text-brand-red uppercase font-black tracking-widest opacity-90 flex items-center gap-1.5 flex-wrap">
+                      <span>{formData.productType}</span>
+                      <span>•</span>
+                      <span>{formData.model}</span>
+                      {formData.gender && (
+                        <>
+                          <span>•</span>
+                          <span className="px-1.5 py-0.5 bg-brand-red/10 text-brand-red rounded text-[9px] font-black uppercase">
+                            {formData.gender === 'M' ? 'Masc' : formData.gender === 'F' ? 'Fem' : formData.gender === 'IM' ? 'Inf. Masc' : 'Inf. Fem'}
+                          </span>
+                        </>
+                      )}
+                    </p>
+                  </div>
                 </div>
-              </div>
-
-              <div className="bg-white p-6 rounded-[2rem] shadow-modern border border-gray-50">
                 <div className="space-y-4">
                   {(() => {
-                    const isInfantilStatus = formData.productType?.toLowerCase().includes('infantil');
+                    const isInfantilStatus = (formData.productType || '').toLowerCase().includes('infantil') || 
+                                             formData.gender === 'IM' || 
+                                             formData.gender === 'IF';
                     const defaultSizes = formData.gridType === 'LETTER' 
                       ? LETTER_SIZES 
                       : (isInfantilStatus 
-                          ? NUMERIC_SIZES.filter(s => parseInt(s, 10) <= 38)
+                          ? NUMERIC_SIZES.filter(s => {
+                              const n = parseInt(s, 10);
+                              return n >= 14 && n <= 37;
+                            })
                           : NUMERIC_SIZES.filter(s => parseInt(s, 10) >= 33)
                         );
                     
@@ -1369,7 +1543,32 @@ const App: React.FC = () => {
                     </span>
                   </motion.button>
 
-                  {/* Option 2: Save & Select Other Brands */}
+                  {/* Option 2: Save & Conclude Brand */}
+                  <motion.button 
+                    whileHover={{ scale: 1.01 }}
+                    whileTap={{ scale: 0.99 }}
+                    disabled={isSaving}
+                    onClick={async () => {
+                      const currentBrand = formData.brand || '';
+                      const success = await saveInventory();
+                      if (success) {
+                        if (currentBrand) {
+                          await toggleBrandCompleted(currentBrand, true);
+                        }
+                        setCurrentView(AppView.INVENTORIES);
+                        showToast(`Marca ${currentBrand || ''} concluída e atualizada no Inventário!`);
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                      }
+                    }}
+                    className="w-full bg-emerald-600 hover:bg-emerald-500 shadow-xl shadow-emerald-600/25 text-white py-5 rounded-[1.5rem] active:scale-[0.98] transition-all flex items-center justify-center gap-3 disabled:opacity-50 font-display"
+                  >
+                    <CheckCircle2 size={22} strokeWidth={2.5} />
+                    <span className="text-xs font-black uppercase tracking-[0.12em]">
+                      Salvar e Concluir Marca (Ver Inventário em Tempo Real)
+                    </span>
+                  </motion.button>
+
+                  {/* Option 3: Save & Select Other Brands */}
                   <motion.button 
                     whileHover={{ scale: 1.01 }}
                     whileTap={{ scale: 0.99 }}
@@ -1431,24 +1630,318 @@ const App: React.FC = () => {
               </div>
             </motion.div>
           )}
+
+          {currentView === AppView.INVENTORIES && (
+            <motion.div 
+              key="inventories"
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -15 }}
+              className="space-y-6 pb-12"
+            >
+              {/* Header */}
+              <div className="bg-white p-6 rounded-[2rem] shadow-modern border border-gray-50 flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                  <button 
+                    type="button"
+                    onClick={() => setCurrentView(AppView.HOME)} 
+                    className="w-11 h-11 flex items-center justify-center bg-brand-slate hover:bg-brand-blue/10 rounded-2xl text-brand-blue active:scale-95 transition-all border border-gray-100 shrink-0 shadow-sm"
+                  >
+                    <ChevronLeft size={22} strokeWidth={3} />
+                  </button>
+                  <div>
+                    <h2 className="text-xl sm:text-2xl font-display font-black text-brand-dark tracking-tighter uppercase leading-none mb-1">Inventário por Marca</h2>
+                    <p className="text-[10px] text-brand-blue font-black uppercase tracking-widest flex items-center gap-1">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                      Atualização em Tempo Real
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleStartNew}
+                  className="bg-brand-red text-white p-3 rounded-2xl font-black text-xs flex items-center gap-1.5 shadow-lg shadow-brand-red/20 active:scale-95 transition-all"
+                >
+                  <Plus size={18} strokeWidth={3} />
+                  <span className="hidden sm:inline uppercase">Contar</span>
+                </button>
+              </div>
+
+              {/* Real-Time Progress Banner */}
+              <div className="bg-brand-dark text-white p-6 sm:p-8 rounded-[2.5rem] shadow-modern-lg space-y-6 relative overflow-hidden">
+                <div className="absolute top-0 right-0 w-64 h-64 bg-emerald-500/10 rounded-full -mr-20 -mt-20 pointer-events-none"></div>
+                
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 relative z-10">
+                  <div>
+                    <span className="text-[9px] font-black uppercase tracking-[0.2em] text-emerald-400 block mb-1">Status de Cobertura do Estoque</span>
+                    <h3 className="text-3xl font-display font-black tracking-tight">
+                      {completedCount} de {allBrandsList.length} <span className="text-white/50 text-xl font-normal">Marcas Concluídas</span>
+                    </h3>
+                  </div>
+                  <div className="text-right sm:text-left bg-white/10 p-4 rounded-2xl backdrop-blur-sm border border-white/10 shrink-0">
+                    <span className="text-[8px] font-black uppercase tracking-widest text-white/50 block">Peças Contadas</span>
+                    <span className="text-3xl font-display font-black text-white">{counts.reduce((sum, c) => sum + c.total, 0)}</span>
+                  </div>
+                </div>
+
+                {/* Progress Bar */}
+                <div className="space-y-2 relative z-10">
+                  <div className="flex justify-between text-[10px] font-black uppercase tracking-wider text-white/70">
+                    <span>Progresso do Inventário</span>
+                    <span>{Math.round((completedCount / (allBrandsList.length || 1)) * 100)}%</span>
+                  </div>
+                  <div className="w-full bg-white/10 h-4 rounded-full overflow-hidden p-0.5 border border-white/10">
+                    <div 
+                      className="bg-gradient-to-r from-emerald-500 to-teal-400 h-full rounded-full transition-all duration-700 shadow-sm"
+                      style={{ width: `${Math.min(100, Math.max(2, (completedCount / (allBrandsList.length || 1)) * 100))}%` }}
+                    ></div>
+                  </div>
+                </div>
+
+                {/* Stats Pills */}
+                <div className="grid grid-cols-3 gap-2 pt-2 relative z-10">
+                  <div className="bg-emerald-500/15 border border-emerald-500/30 p-3 rounded-2xl text-center">
+                    <span className="text-xl font-display font-black text-emerald-400 block leading-none mb-1">{completedCount}</span>
+                    <span className="text-[8px] font-black uppercase tracking-wider text-emerald-200">Concluídas</span>
+                  </div>
+                  <div className="bg-blue-500/15 border border-blue-500/30 p-3 rounded-2xl text-center">
+                    <span className="text-xl font-display font-black text-blue-400 block leading-none mb-1">{inProgressCount}</span>
+                    <span className="text-[8px] font-black uppercase tracking-wider text-blue-200">Em Contagem</span>
+                  </div>
+                  <div className="bg-white/5 border border-white/10 p-3 rounded-2xl text-center">
+                    <span className="text-xl font-display font-black text-white/60 block leading-none mb-1">{pendingCount}</span>
+                    <span className="text-[8px] font-black uppercase tracking-wider text-white/40">Pendentes</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Filters & Search */}
+              <div className="space-y-3">
+                <div className="relative">
+                  <Search className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+                  <input 
+                    type="text"
+                    placeholder="Buscar marca no inventário..."
+                    className="w-full pl-14 pr-10 py-4 bg-white rounded-2xl shadow-sm border border-gray-100 focus:border-brand-accent focus:outline-none font-bold text-sm text-brand-dark placeholder:text-gray-300"
+                    value={brandSearchTerm}
+                    onChange={(e) => setBrandSearchTerm(e.target.value)}
+                  />
+                  {brandSearchTerm && (
+                    <button 
+                      onClick={() => setBrandSearchTerm('')}
+                      className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-red-500"
+                    >
+                      <XCircle size={16} />
+                    </button>
+                  )}
+                </div>
+
+                {/* Filter Tabs */}
+                <div className="flex flex-wrap gap-2">
+                  {[
+                    { id: 'ALL', label: `Todas (${allBrandsList.length})` },
+                    { id: 'COMPLETED', label: `✅ Concluídas (${completedCount})` },
+                    { id: 'IN_PROGRESS', label: `⏳ Em Contagem (${inProgressCount})` },
+                    { id: 'PENDING', label: `⚪ Pendentes (${pendingCount})` },
+                  ].map(tab => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setBrandStatusFilter(tab.id as any)}
+                      className={`px-4 py-2 rounded-xl text-xs font-black transition-all border ${
+                        brandStatusFilter === tab.id
+                          ? 'bg-brand-dark text-white border-brand-dark shadow-sm'
+                          : 'bg-white text-gray-600 hover:bg-gray-50 border-gray-200'
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Brand List Cards */}
+              <div className="space-y-3">
+                {(() => {
+                  const filtered = brandStats.filter(brand => {
+                    const matchesSearch = brand.name.toLowerCase().includes(brandSearchTerm.toLowerCase());
+                    if (!matchesSearch) return false;
+                    if (brandStatusFilter === 'COMPLETED') return brand.status === 'COMPLETED';
+                    if (brandStatusFilter === 'IN_PROGRESS') return brand.status === 'IN_PROGRESS';
+                    if (brandStatusFilter === 'PENDING') return brand.status === 'PENDING';
+                    return true;
+                  });
+
+                  if (filtered.length === 0) {
+                    return (
+                      <div className="bg-white p-12 rounded-[2rem] text-center border border-dashed border-gray-200 space-y-3">
+                        <Package size={40} className="mx-auto text-gray-300" />
+                        <p className="text-sm font-bold text-gray-400 uppercase tracking-wider">Nenhuma marca encontrada</p>
+                      </div>
+                    );
+                  }
+
+                  return filtered.map(brand => {
+                    const isExpanded = expandedBrand === brand.name;
+                    return (
+                      <div 
+                        key={brand.name}
+                        className={`bg-white rounded-3xl p-5 border transition-all shadow-sm ${
+                          brand.status === 'COMPLETED' 
+                            ? 'border-emerald-200/80 bg-gradient-to-r from-emerald-50/30 to-white' 
+                            : brand.status === 'IN_PROGRESS'
+                              ? 'border-blue-200 bg-gradient-to-r from-blue-50/20 to-white'
+                              : 'border-gray-100'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 mb-1 flex-wrap">
+                              <h4 className="text-lg font-display font-black text-brand-dark uppercase tracking-tight">{brand.name}</h4>
+                              
+                              {/* Status Badge */}
+                              {brand.status === 'COMPLETED' && (
+                                <span className="px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-800 border border-emerald-200 flex items-center gap-1">
+                                  <CheckCircle2 size={12} /> Concluída
+                                </span>
+                              )}
+                              {brand.status === 'IN_PROGRESS' && (
+                                <span className="px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider bg-blue-100 text-blue-800 border border-blue-200 flex items-center gap-1">
+                                  ⏳ Em Contagem ({brand.totalPieces} pcs)
+                                </span>
+                              )}
+                              {brand.status === 'PENDING' && (
+                                <span className="px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider bg-gray-100 text-gray-500 border border-gray-200">
+                                  ⚪ Pendente
+                                </span>
+                              )}
+                            </div>
+
+                            <div className="flex items-center gap-4 text-xs font-bold text-gray-500">
+                              <span><strong className="text-brand-dark">{brand.totalPieces}</strong> peças total</span>
+                              <span>•</span>
+                              <span><strong className="text-brand-dark">{brand.totalModels}</strong> modelos</span>
+                              <span>•</span>
+                              <span><strong className="text-brand-dark">{brand.totalLots}</strong> lotes</span>
+                            </div>
+                          </div>
+
+                          {/* Quick Action Buttons */}
+                          <div className="flex items-center gap-2 shrink-0">
+                            {/* Toggle Concluded */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                toggleBrandCompleted(brand.name);
+                                showToast(
+                                  completedBrands[brand.name] 
+                                    ? `Marca ${brand.name} reaberta` 
+                                    : `Marca ${brand.name} concluída!`,
+                                  'success'
+                                );
+                              }}
+                              title={completedBrands[brand.name] ? 'Reabrir contagem' : 'Marcar como Concluída'}
+                              className={`p-3 rounded-2xl border font-black text-xs flex items-center gap-1.5 transition-all ${
+                                completedBrands[brand.name]
+                                  ? 'bg-emerald-600 text-white border-emerald-600 shadow-md'
+                                  : 'bg-gray-50 hover:bg-emerald-50 text-gray-500 hover:text-emerald-700 border-gray-200'
+                              }`}
+                            >
+                              <CheckCircle2 size={18} strokeWidth={2.5} />
+                              <span className="hidden sm:inline text-[10px] uppercase">
+                                {completedBrands[brand.name] ? 'Concluída' : 'Concluir'}
+                              </span>
+                            </button>
+
+                            {/* Start/Continue Count */}
+                            <button
+                              type="button"
+                              onClick={() => handleStartWithSameBrand(brand.name)}
+                              className="p-3 bg-brand-blue hover:bg-brand-dark text-white rounded-2xl font-black text-xs flex items-center gap-1.5 shadow-md active:scale-95 transition-all"
+                              title={`Contar ${brand.name}`}
+                            >
+                              <Plus size={18} strokeWidth={3} />
+                              <span className="hidden sm:inline text-[10px] uppercase">Contar</span>
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Accordion toggle if items exist */}
+                        {brand.items.length > 0 && (
+                          <div className="mt-3 pt-3 border-t border-gray-100 flex items-center justify-between">
+                            <button
+                              type="button"
+                              onClick={() => setExpandedBrand(isExpanded ? null : brand.name)}
+                              className="text-[10px] font-black text-brand-blue uppercase tracking-widest hover:underline flex items-center gap-1"
+                            >
+                              {isExpanded ? 'Ocultar Lotes' : `Ver ${brand.items.length} Lote(s) da Marca`}
+                            </button>
+                            <span className="text-[9px] font-bold text-gray-400">
+                              Último lote: {new Date(brand.items[0]?.createdAt || 0).toLocaleDateString('pt-BR')}
+                            </span>
+                          </div>
+                        )}
+
+                        {/* Expanded Items List */}
+                        {isExpanded && brand.items.length > 0 && (
+                          <motion.div 
+                            initial={{ opacity: 0, height: 0 }}
+                            animate={{ opacity: 1, height: 'auto' }}
+                            className="mt-3 space-y-2 pt-2 border-t border-dashed border-gray-200"
+                          >
+                            {brand.items.map(item => (
+                              <div key={item.id} className="p-3 bg-brand-slate/60 rounded-2xl flex items-center justify-between text-xs font-bold text-brand-dark">
+                                <div>
+                                  <span className="block font-black text-sm uppercase">{item.model}</span>
+                                  <span className="text-[10px] text-gray-500 font-normal">
+                                    Cor: {item.color || '-'} | Gênero: {item.gender || '-'}
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-3">
+                                  <span className="px-3 py-1 bg-white rounded-xl text-brand-blue font-black text-sm shadow-sm border border-gray-100">
+                                    {item.total} pcs
+                                  </span>
+                                  <button 
+                                    onClick={() => handleEdit(item)} 
+                                    className="p-2 text-brand-blue hover:bg-white rounded-xl"
+                                    title="Editar"
+                                  >
+                                    <Edit2 size={14} />
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </motion.div>
+                        )}
+                      </div>
+                    );
+                  });
+                })()}
+              </div>
+            </motion.div>
+          )}
+
           {currentView === AppView.ANALYTICS && (
             <motion.div 
               key="analytics"
-              initial={{ opacity: 0, scale: 0.95 }}
+              initial={{ opacity: 0, scale: 0.98 }}
               animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="space-y-8 pb-10"
+              exit={{ opacity: 0, scale: 0.98 }}
+              className="space-y-6 pb-10"
             >
-              <div className="flex items-center gap-4 mb-2">
-                <button 
-                  onClick={() => setCurrentView(AppView.HOME)} 
-                  className="w-12 h-12 flex items-center justify-center bg-white rounded-2xl shadow-modern text-brand-blue active:scale-95 transition-all border border-gray-100"
-                >
-                  <ChevronLeft size={24} strokeWidth={3} />
-                </button>
-                <div>
-                  <h2 className="text-3xl font-display font-black text-brand-dark tracking-tighter uppercase leading-none mb-1">Visão Geral</h2>
-                  <p className="text-[10px] text-brand-red uppercase font-black tracking-widest opacity-90">Estatísticas & Inteligencia IA</p>
+              <div className="bg-white p-6 rounded-[2rem] shadow-modern border border-gray-50">
+                <div className="flex items-center gap-4">
+                  <button 
+                    type="button"
+                    onClick={() => setCurrentView(AppView.HOME)} 
+                    className="w-11 h-11 flex items-center justify-center bg-brand-slate hover:bg-brand-blue/10 rounded-2xl text-brand-blue active:scale-95 transition-all border border-gray-100 shrink-0 shadow-sm"
+                  >
+                    <ChevronLeft size={22} strokeWidth={3} />
+                  </button>
+                  <div className="min-w-0 flex-1">
+                    <h2 className="text-xl sm:text-2xl font-display font-black text-brand-dark tracking-tighter uppercase leading-none mb-1">Visão Geral</h2>
+                    <p className="text-[10px] text-brand-red uppercase font-black tracking-widest opacity-90">Estatísticas & Inteligencia IA</p>
+                  </div>
                 </div>
               </div>
 
@@ -1697,18 +2190,26 @@ const App: React.FC = () => {
 
        {/* FIXED FOOTER NAVIGATION (No Print) */}
       <nav className="no-print fixed bottom-0 left-0 right-0 max-w-lg mx-auto p-4 z-50">
-        <div className="bg-brand-blue/95 backdrop-blur-xl rounded-[2.5rem] p-2 flex gap-1.5 shadow-2xl shadow-brand-blue/40 border border-white/10">
+        <div className="bg-brand-blue/95 backdrop-blur-xl rounded-[2.5rem] p-2 flex gap-1 shadow-2xl shadow-brand-blue/40 border border-white/10">
           <button 
             onClick={() => setCurrentView(AppView.HOME)}
-            className={`flex-1 flex items-center justify-center gap-2 py-4 rounded-[1.8rem] transition-all duration-500 ${currentView === AppView.HOME ? 'bg-white text-brand-blue shadow-xl' : 'text-white/40 hover:text-white'}`}
+            className={`flex-1 flex items-center justify-center gap-1.5 py-4 rounded-[1.8rem] transition-all duration-500 ${currentView === AppView.HOME ? 'bg-white text-brand-blue shadow-xl' : 'text-white/40 hover:text-white'}`}
           >
             <Home size={18} fill={currentView === AppView.HOME ? "currentColor" : "none"} />
             <span className="text-[9px] font-black uppercase tracking-wider leading-none">Início</span>
           </button>
+
+          <button 
+            onClick={() => setCurrentView(AppView.INVENTORIES)}
+            className={`flex-1 flex items-center justify-center gap-1.5 py-4 rounded-[1.8rem] transition-all duration-500 ${currentView === AppView.INVENTORIES ? 'bg-white text-brand-blue shadow-xl' : 'text-white/40 hover:text-white'}`}
+          >
+            <ClipboardList size={18} />
+            <span className="text-[9px] font-black uppercase tracking-wider leading-none">Marcas</span>
+          </button>
           
           <button 
             onClick={() => setCurrentView(AppView.ANALYTICS)}
-            className={`flex-1 flex items-center justify-center gap-2 py-4 rounded-[1.8rem] transition-all duration-500 ${currentView === AppView.ANALYTICS ? 'bg-white text-brand-blue shadow-xl' : 'text-white/40 hover:text-white'}`}
+            className={`flex-1 flex items-center justify-center gap-1.5 py-4 rounded-[1.8rem] transition-all duration-500 ${currentView === AppView.ANALYTICS ? 'bg-white text-brand-blue shadow-xl' : 'text-white/40 hover:text-white'}`}
           >
             <BrainCircuit size={18} />
             <span className="text-[9px] font-black uppercase tracking-wider leading-none">Análise</span>
@@ -1716,7 +2217,7 @@ const App: React.FC = () => {
 
           <button 
             onClick={generatePDF}
-            className="flex-1 flex items-center justify-center gap-2 py-4 rounded-[1.8rem] text-white/40 hover:text-white hover:bg-white/5 transition-all duration-300"
+            className="flex-1 flex items-center justify-center gap-1.5 py-4 rounded-[1.8rem] text-white/40 hover:text-white hover:bg-white/5 transition-all duration-300"
           >
             <Download size={18} />
             <span className="text-[9px] font-black uppercase tracking-wider leading-none">PDF</span>
@@ -1901,7 +2402,19 @@ const App: React.FC = () => {
                   <div className="grid grid-cols-2 gap-4 border-t border-dashed border-gray-100 pt-3.5">
                     <div>
                       <span className="text-[9px] font-black text-gray-400 uppercase tracking-wider block mb-0.5">Modelo</span>
-                      <span className="text-sm font-bold text-brand-dark uppercase block truncate">{viewingPdfItem.model || '-'}</span>
+                      <span className="text-sm font-bold text-brand-dark uppercase flex items-center gap-1.5 truncate">
+                        <span>{viewingPdfItem.model || '-'}</span>
+                        {viewingPdfItem.gender && (
+                          <span className={`text-[8px] px-1 py-0.5 rounded font-black ${
+                            viewingPdfItem.gender === 'M' ? 'bg-blue-50 text-blue-600' :
+                            viewingPdfItem.gender === 'F' ? 'bg-pink-50 text-pink-600' :
+                            viewingPdfItem.gender === 'IM' ? 'bg-indigo-50 text-indigo-600' :
+                            'bg-purple-50 text-purple-600'
+                          }`}>
+                            {viewingPdfItem.gender}
+                          </span>
+                        )}
+                      </span>
                     </div>
                     <div>
                       <span className="text-[9px] font-black text-gray-400 uppercase tracking-wider block mb-0.5">Cor</span>
@@ -1993,7 +2506,8 @@ const App: React.FC = () => {
                       doc.text('MARCA/COR:', 20, 67);
                       doc.setTextColor(29, 43, 91);
                       doc.text(viewingPdfItem.productType?.toUpperCase() || '-', 45, 53);
-                      doc.text(viewingPdfItem.model?.toUpperCase() || '-', 45, 60);
+                      const modelWithGender = (viewingPdfItem.model || '').toUpperCase() + (viewingPdfItem.gender ? ` (${viewingPdfItem.gender})` : '');
+                      doc.text(modelWithGender || '-', 45, 60);
                       doc.text(`${viewingPdfItem.brand || '-'} / ${viewingPdfItem.color || '-'}`, 45, 67);
                       doc.setTextColor(100, 100, 100);
                       doc.text('DATA:', 130, 53);

@@ -14,6 +14,7 @@ export interface InventoryCount {
   total: number;
   createdAt: number;
   userId: string;
+  gender?: string;
 }
 
 export enum AppView {
