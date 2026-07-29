@@ -1351,18 +1351,6 @@ const App: React.FC = () => {
 
         <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
           <button 
-            onClick={() => setCurrentView(AppView.REPORTS)}
-            className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all active:scale-95 border ${
-              currentView === AppView.REPORTS
-                ? 'bg-blue-600 text-white border-blue-400 shadow-md shadow-blue-950/50'
-                : 'bg-blue-950/60 hover:bg-blue-900/60 text-blue-300 border-blue-500/30'
-            }`}
-            title="Abrir Módulo de Relatórios"
-          >
-            <FileText size={15} />
-            <span className="hidden sm:inline">Relatórios</span>
-          </button>
-          <button 
             onClick={() => setCurrentView(AppView.DASHBOARD)}
             className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all active:scale-95 border ${
               currentView === AppView.DASHBOARD
@@ -1467,29 +1455,6 @@ const App: React.FC = () => {
               </motion.div>
 
               <div className="flex flex-col gap-3.5 sm:gap-5">
-                {/* RELATÓRIOS AVANÇADOS ACTION CARD */}
-                <motion.button 
-                  whileTap={{ scale: 0.98 }}
-                  onClick={() => setCurrentView(AppView.REPORTS)}
-                  className="relative overflow-hidden bg-gradient-to-r from-blue-900 via-slate-900 to-indigo-950 text-white p-4 sm:p-6 rounded-2xl sm:rounded-[2rem] shadow-2xl shadow-blue-950/40 flex items-center justify-between group active:brightness-95 transition-all text-left border-2 border-blue-500/30"
-                >
-                  <div className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/10 to-white/0 -translate-x-full group-hover:translate-x-full transition-transform duration-1000"></div>
-                  <div className="flex items-center gap-3 sm:gap-4 min-w-0 pr-2">
-                    <div className="bg-blue-500/20 text-blue-400 border border-blue-500/40 w-10 h-10 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform duration-300 shadow-inner">
-                      <FileText size={22} strokeWidth={2.5} className="sm:w-7 sm:h-7" />
-                    </div>
-                    <div className="font-display min-w-0">
-                      <span className="text-base sm:text-xl font-black tracking-tight uppercase leading-none mb-1 flex items-center gap-1.5 flex-wrap">
-                        RELATÓRIOS
-                        <span className="bg-blue-400 text-slate-950 text-[8px] sm:text-[9px] px-1.5 sm:px-2 py-0.5 rounded-full font-extrabold uppercase whitespace-nowrap">PDF / Excel / CSV</span>
-                      </span>
-                      <span className="block text-[9px] sm:text-[10px] font-bold text-slate-300 uppercase tracking-wide leading-tight">Filtros por Marca, Modelo, Cor, Zerados, Divergências</span>
-                    </div>
-                  </div>
-                  <div className="px-3 sm:px-3.5 py-1.5 bg-blue-500 text-slate-950 font-black uppercase text-[9px] sm:text-[10px] tracking-wider rounded-xl shadow-md group-hover:bg-blue-400 transition-colors shrink-0">
-                    Gerar
-                  </div>
-                </motion.button>
 
                 {/* DASHBOARD PROFISSIONAL ACTION CARD */}
                 <motion.button 
@@ -1515,53 +1480,6 @@ const App: React.FC = () => {
                   </div>
                 </motion.button>
 
-                {/* MODO INVENTÁRIO EXCLUSIVO ACTION CARD */}
-                <motion.button 
-                  whileTap={{ scale: 0.98 }}
-                  onClick={() => setCurrentView(AppView.INVENTORY_MODE)}
-                  className="relative overflow-hidden bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 text-white p-4 sm:p-6 rounded-2xl sm:rounded-[2rem] shadow-2xl shadow-emerald-600/30 flex items-center justify-between group active:brightness-95 transition-all text-left border-2 border-emerald-400/30"
-                >
-                  <div className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/20 to-white/0 -translate-x-full group-hover:translate-x-full transition-transform duration-1000"></div>
-                  <div className="flex items-center gap-3 sm:gap-4 min-w-0 pr-2">
-                    <div className="bg-white/20 w-10 h-10 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform duration-300 shadow-inner">
-                      <Zap size={22} strokeWidth={2.5} className="text-amber-300 animate-pulse sm:w-7 sm:h-7" />
-                    </div>
-                    <div className="font-display min-w-0">
-                      <span className="text-base sm:text-xl font-black tracking-tight uppercase leading-none mb-1 flex items-center gap-1.5 flex-wrap">
-                        MODO INVENTÁRIO
-                        <span className="bg-amber-400 text-slate-950 text-[8px] sm:text-[9px] px-1.5 sm:px-2 py-0.5 rounded-full font-extrabold uppercase whitespace-nowrap">Rápido</span>
-                      </span>
-                      <span className="block text-[9px] sm:text-[10px] font-bold text-emerald-100 uppercase tracking-wide leading-tight">Contagem ultra-rápida em tela limpa</span>
-                    </div>
-                  </div>
-                  <div className="px-3 sm:px-3.5 py-1.5 bg-white text-emerald-700 font-black uppercase text-[9px] sm:text-[10px] tracking-wider rounded-xl shadow-md group-hover:bg-emerald-50 transition-colors shrink-0">
-                    Iniciar
-                  </div>
-                </motion.button>
-
-                {/* MOVIMENTAÇÕES DE ESTOQUE ACTION CARD */}
-                <motion.button 
-                  whileTap={{ scale: 0.98 }}
-                  onClick={() => setCurrentView(AppView.STOCK_MOVEMENTS)}
-                  className="relative overflow-hidden bg-gradient-to-r from-indigo-700 via-blue-700 to-indigo-800 text-white p-4 sm:p-6 rounded-2xl sm:rounded-[2rem] shadow-2xl shadow-indigo-600/30 flex items-center justify-between group active:brightness-95 transition-all text-left border-2 border-indigo-400/30"
-                >
-                  <div className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/10 to-white/0 -translate-x-full group-hover:translate-x-full transition-transform duration-1000"></div>
-                  <div className="flex items-center gap-3 sm:gap-4 min-w-0 pr-2">
-                    <div className="bg-white/20 w-10 h-10 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform duration-300 shadow-inner">
-                      <History size={22} strokeWidth={2.5} className="text-indigo-200 sm:w-7 sm:h-7" />
-                    </div>
-                    <div className="font-display min-w-0">
-                      <span className="text-base sm:text-xl font-black tracking-tight uppercase leading-none mb-1 flex items-center gap-1.5 flex-wrap">
-                        Movimentações
-                        <span className="bg-indigo-300 text-slate-950 text-[8px] sm:text-[9px] px-1.5 sm:px-2 py-0.5 rounded-full font-extrabold uppercase whitespace-nowrap">Estoque</span>
-                      </span>
-                      <span className="block text-[9px] sm:text-[10px] font-bold text-indigo-100 uppercase tracking-wide leading-tight">Entradas, Saídas, Ajustes e Histórico</span>
-                    </div>
-                  </div>
-                  <div className="px-3 sm:px-3.5 py-1.5 bg-white text-indigo-700 font-black uppercase text-[9px] sm:text-[10px] tracking-wider rounded-xl shadow-md group-hover:bg-indigo-50 transition-colors shrink-0">
-                    Ver
-                  </div>
-                </motion.button>
 
                 {/* LER CÓDIGO DE BARRAS ACTION CARD */}
                 <motion.button 
@@ -1852,76 +1770,7 @@ const App: React.FC = () => {
                   </div>
                 )}
                 
-                {/* Barcode Banner or Quick Scan on IDENTIFY screen (Photo 2) */}
-                {formData.barcode ? (
-                  <div className="bg-red-50 border-2 border-red-200 p-4 rounded-2xl flex items-center justify-between gap-3 relative z-10 shadow-sm">
-                    <div className="flex items-center gap-3">
-                      <div className="p-3 bg-red-600 text-white rounded-xl shadow-md">
-                        <Barcode size={24} />
-                      </div>
-                      <div>
-                        <span className="text-[10px] font-black uppercase tracking-widest text-red-600 block">
-                          Código de Barras Bipado
-                        </span>
-                        <span className="font-mono text-lg font-black text-brand-dark">
-                          {formData.barcode}
-                        </span>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setFormData(prev => ({ ...prev, barcode: '' }))}
-                      className="text-xs font-bold text-gray-500 hover:text-red-600 bg-white px-3 py-2 rounded-xl border border-gray-200 shadow-sm transition-all"
-                    >
-                      Remover Código
-                    </button>
-                  </div>
-                ) : (
-                  <div className="space-y-2 relative z-10">
-                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2 flex items-center justify-between">
-                      <span>Código de Barras (Opcional)</span>
-                      <span className="text-brand-blue font-bold text-[9px]">Leitura Rápida</span>
-                    </label>
-                    <div className="relative">
-                      <input
-                        type="text"
-                        placeholder="Digite ou bipe o código de barras aqui..."
-                        className="w-full p-4 bg-brand-slate border border-gray-100 focus:border-brand-accent focus:bg-white rounded-2xl focus:outline-none font-mono font-bold text-base text-brand-dark pr-12 transition-all"
-                        onKeyDown={async (e) => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            const val = (e.target as HTMLInputElement).value.trim();
-                            if (val) {
-                              const clean = sanitizeBarcode(val);
-                              const found = await getReferenceByBarcode(clean);
-                              if (found) {
-                                setFormData(prev => ({
-                                  ...prev,
-                                  barcode: found.barcode,
-                                  brand: found.brand || prev.brand,
-                                  model: found.model || prev.model,
-                                  color: found.color || prev.color,
-                                  gender: found.gender || prev.gender,
-                                  arrivalMonth: found.arrivalMonth || prev.arrivalMonth,
-                                  arrivalYear: found.arrivalYear || prev.arrivalYear,
-                                  gridType: found.gridType || prev.gridType,
-                                  sizes: found.sizes ? { ...found.sizes } : prev.sizes
-                                }));
-                                showToast(`Dados encontrados para o código: ${found.barcode}`, 'success');
-                              } else {
-                                setFormData(prev => ({ ...prev, barcode: clean }));
-                                showToast(`Código ${clean} pronto para cadastro`, 'success');
-                              }
-                            }
-                          }
-                        }}
-                      />
-                      <div className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400">
-                        <Barcode size={20} />
-                      </div>
-                    </div>
-                  </div>
-                )}
+
 
                 {/* Brand Selection with Dropdown */}
                 <div className="space-y-2 relative z-10">
