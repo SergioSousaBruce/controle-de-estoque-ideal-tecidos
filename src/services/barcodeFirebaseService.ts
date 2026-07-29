@@ -264,6 +264,91 @@ export async function deleteBarcodeReference(barcode: string): Promise<void> {
 }
 
 /**
+ * Consult Firebase for ALL parallel references registered under a given Barcode
+ */
+export async function getAllMatchingReferencesByBarcode(barcode: string): Promise<BarcodeReference[]> {
+  const cleanCode = sanitizeBarcode(barcode);
+  if (!cleanCode) return [];
+
+  const results: BarcodeReference[] = [];
+  const seenKeys = new Set<string>();
+
+  try {
+    // 1. Check primary inventory_barcodes doc
+    const docRef = doc(db, 'inventory_barcodes', cleanCode);
+    const docSnap = await getDoc(docRef);
+
+    if (docSnap.exists()) {
+      const data = docSnap.data() as BarcodeReference;
+      const key = `${(data.brand || '').toLowerCase()}_${(data.model || '').toLowerCase()}_${(data.color || '').toLowerCase()}`;
+      seenKeys.add(key);
+      results.push(data);
+    }
+
+    // 2. Query inventory collection for all items matching this barcode
+    const qBarcode = query(collection(db, 'inventory'), where('barcode', '==', cleanCode));
+    const snapBarcode = await getDocs(qBarcode);
+    snapBarcode.forEach(d => {
+      const data = d.data();
+      const key = `${(data.brand || '').toLowerCase()}_${(data.model || '').toLowerCase()}_${(data.color || '').toLowerCase()}`;
+      if (!seenKeys.has(key)) {
+        seenKeys.add(key);
+        results.push({
+          barcode: cleanCode,
+          brand: data.brand || '',
+          model: data.model || '',
+          productType: data.productType || 'Calçado',
+          color: data.color || '',
+          arrivalMonth: data.arrivalMonth || '',
+          arrivalYear: data.arrivalYear || '',
+          gridType: data.gridType || 'LETTER',
+          sizes: data.sizes || {},
+          total: data.total || 0,
+          createdAt: data.createdAt || Date.now(),
+          updatedAt: data.updatedAt || Date.now(),
+          lastCountDate: data.createdAt || Date.now(),
+          userId: data.userId || 'guest',
+          gender: data.gender || ''
+        });
+      }
+    });
+
+    // 3. Fallback: search inventory collection for items where model == cleanCode
+    const qModel = query(collection(db, 'inventory'), where('model', '==', cleanCode));
+    const snapModel = await getDocs(qModel);
+    snapModel.forEach(d => {
+      const data = d.data();
+      const key = `${(data.brand || '').toLowerCase()}_${(data.model || '').toLowerCase()}_${(data.color || '').toLowerCase()}`;
+      if (!seenKeys.has(key)) {
+        seenKeys.add(key);
+        results.push({
+          barcode: cleanCode,
+          brand: data.brand || '',
+          model: data.model || '',
+          productType: data.productType || 'Calçado',
+          color: data.color || '',
+          arrivalMonth: data.arrivalMonth || '',
+          arrivalYear: data.arrivalYear || '',
+          gridType: data.gridType || 'LETTER',
+          sizes: data.sizes || {},
+          total: data.total || 0,
+          createdAt: data.createdAt || Date.now(),
+          updatedAt: data.updatedAt || Date.now(),
+          lastCountDate: data.createdAt || Date.now(),
+          userId: data.userId || 'guest',
+          gender: data.gender || ''
+        });
+      }
+    });
+
+    return results;
+  } catch (error) {
+    console.error("Error fetching matching parallel barcode references:", error);
+    return results;
+  }
+}
+
+/**
  * REQUISITO: buscarProdutoPorCodigo
  * Localiza instantaneamente o produto no banco de dados pelo código de barras único.
  */

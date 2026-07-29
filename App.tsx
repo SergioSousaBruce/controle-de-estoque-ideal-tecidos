@@ -875,6 +875,7 @@ const App: React.FC = () => {
 
       const finalCount: InventoryCount = {
         id: itemDoc.id,
+        barcode: (formData.barcode || '').trim() || undefined,
         productType: syncProductType,
         model,
         brand: (formData.brand || '').trim(),
@@ -2053,6 +2054,30 @@ const App: React.FC = () => {
                       )}
                     </p>
                   </div>
+
+                  {editingId && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingId(null);
+                        setFormData(prev => ({
+                          ...prev,
+                          model: '',
+                          color: '',
+                          sizes: {},
+                          total: 0
+                        }));
+                        setCurrentView(AppView.IDENTIFY);
+                        showToast('Salvar como Novo Item: Preencha o novo modelo/cor!', 'success');
+                      }}
+                      className="px-3.5 py-2.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all flex items-center gap-1.5 shrink-0 shadow-sm"
+                      title="Clique para não alterar o item antigo e sim criar um novo cadastro para esta caixa"
+                    >
+                      <Plus size={14} strokeWidth={3} />
+                      <span className="hidden sm:inline">Nova Caixa / Outro Modelo</span>
+                      <span className="sm:hidden">Nova Caixa</span>
+                    </button>
+                  )}
                 </div>
                 <div className="space-y-4">
                   {(() => {

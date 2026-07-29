@@ -28,11 +28,15 @@ import {
   ArrowUpRight,
   ArrowDownRight,
   Lock,
-  Unlock
+  Unlock,
+  Zap,
+  RotateCcw,
+  LayoutGrid
 } from 'lucide-react';
 import { 
   BarcodeReference, 
   getReferenceByBarcode, 
+  getAllMatchingReferencesByBarcode,
   saveBarcodeReference, 
   getAllBarcodeReferences, 
   deleteBarcodeReference,
@@ -76,6 +80,7 @@ export const BarcodeScannerManager: React.FC<BarcodeScannerManagerProps> = ({
   // Active Lookup Result
   const [scannedCode, setScannedCode] = useState<string | null>(null);
   const [existingRef, setExistingRef] = useState<BarcodeReference | null>(null);
+  const [matchingRefs, setMatchingRefs] = useState<BarcodeReference[]>([]);
   const [isNewReference, setIsNewReference] = useState<boolean>(false);
   
   // Confirmation state before editing/updating
@@ -179,12 +184,15 @@ export const BarcodeScannerManager: React.FC<BarcodeScannerManagerProps> = ({
     lastSearchedCodeRef.current = clean;
 
     try {
-      const found = await getReferenceByBarcode(clean);
+      const matches = await getAllMatchingReferencesByBarcode(clean);
+      setMatchingRefs(matches);
 
-      const targetBrand = found ? (found.brand || '') : '';
+      const found = matches.length > 0 ? matches[0] : null;
+
+      const targetBrand = found ? (found.brand || '') : (activeLockedReference?.brand || '');
       const targetModel = found ? (found.model || '') : '';
-      const targetGender = found ? (found.gender || getGenderFromProductType(found.productType, '') || 'M') : '';
-      const targetProductType = found ? (found.productType || getDefaultProductTypeFromGender(targetGender, '') || '') : '';
+      const targetGender = found ? (found.gender || getGenderFromProductType(found.productType, '') || 'M') : 'M';
+      const targetProductType = found ? (found.productType || getDefaultProductTypeFromGender(targetGender, '') || 'Tênis Adulto Masculino') : 'Tênis Adulto Masculino';
       const targetColor = found ? (found.color || '') : '';
       const targetMonth = found ? (found.arrivalMonth || (new Date().getMonth() + 1).toString().padStart(2, '0')) : (new Date().getMonth() + 1).toString().padStart(2, '0');
       const targetYear = found ? (found.arrivalYear || new Date().getFullYear().toString()) : new Date().getFullYear().toString();
@@ -192,12 +200,12 @@ export const BarcodeScannerManager: React.FC<BarcodeScannerManagerProps> = ({
       const targetSizes = found ? { ...(found.sizes || {}) } : {};
       const targetTotal = found ? (found.total || 0) : 0;
 
-      if (found) {
+      if (matches.length > 0) {
         setExistingRef(found);
         setIsNewReference(false);
-        setIsConfirmedToEdit(true);
+        setIsConfirmedToEdit(false);
         setFormData({
-          barcode: found.barcode,
+          barcode: clean,
           brand: targetBrand,
           model: targetModel,
           productType: targetProductType,
@@ -209,46 +217,36 @@ export const BarcodeScannerManager: React.FC<BarcodeScannerManagerProps> = ({
           total: targetTotal,
           gender: targetGender
         });
-        showToast(`Produto Localizado: ${found.brand} ${found.model}`, 'success');
+        showToast(`${matches.length} cadastro(s) localizado(s) para este código`, 'success');
       } else {
         setExistingRef(null);
+        setMatchingRefs([]);
         setIsNewReference(true);
         setIsConfirmedToEdit(true);
 
         const initialSizes: Record<string, number> = {};
         NUMERIC_SIZES.slice(0, 8).forEach(s => { initialSizes[s] = 0; });
 
-        setFormData({
+        const newFormData = {
           barcode: clean,
-          brand: '',
+          brand: activeLockedReference?.brand || '',
           model: '',
           productType: 'Tênis Adulto Masculino',
           color: '',
           arrivalMonth: targetMonth,
           arrivalYear: targetYear,
-          gridType: 'NUMERIC',
+          gridType: 'NUMERIC' as SizeGridType,
           sizes: initialSizes,
           total: 0,
           gender: 'M'
-        });
+        };
 
-        showToast('Código lido! Direcionando para tela de cadastro/contagem...', 'success');
-      }
+        setFormData(newFormData);
+        showToast('Código lido! Direcionando para tela de cadastro...', 'success');
 
-      if (onSelectForCounting) {
-        onSelectForCounting({
-          barcode: clean,
-          brand: targetBrand,
-          model: targetModel,
-          productType: targetProductType,
-          color: targetColor,
-          arrivalMonth: targetMonth,
-          arrivalYear: targetYear,
-          gridType: targetGrid,
-          sizes: targetSizes,
-          total: targetTotal,
-          gender: targetGender
-        });
+        if (onSelectForCounting) {
+          onSelectForCounting(newFormData);
+        }
       }
     } catch (err) {
       console.error(err);
@@ -256,6 +254,41 @@ export const BarcodeScannerManager: React.FC<BarcodeScannerManagerProps> = ({
     } finally {
       isSearchingRef.current = false;
       setIsSearching(false);
+    }
+  };
+
+  // Start a fresh new registration for a new box/color that shares the same barcode
+  const handleCreateNewWithSameBarcode = () => {
+    setIsNewReference(true);
+    setExistingRef(null);
+    setIsConfirmedToEdit(true);
+
+    const initialSizes: Record<string, number> = {};
+    NUMERIC_SIZES.slice(0, 8).forEach(s => { initialSizes[s] = 0; });
+
+    const activeBrand = activeLockedReference?.brand || existingRef?.brand || formData.brand || '';
+    const targetMonth = (new Date().getMonth() + 1).toString().padStart(2, '0');
+    const targetYear = new Date().getFullYear().toString();
+
+    const newFormData = {
+      barcode: scannedCode || formData.barcode || barcodeInput,
+      brand: activeBrand,
+      model: '',
+      productType: formData.productType || 'Tênis Adulto Masculino',
+      color: '',
+      arrivalMonth: targetMonth,
+      arrivalYear: targetYear,
+      gridType: 'NUMERIC' as SizeGridType,
+      sizes: initialSizes,
+      total: 0,
+      gender: formData.gender || 'M'
+    };
+
+    setFormData(newFormData);
+    showToast('Iniciando cadastro de NOVO modelo/cor para este mesmo código de barras!', 'success');
+
+    if (onSelectForCounting) {
+      onSelectForCounting(newFormData);
     }
   };
 
@@ -614,192 +647,355 @@ export const BarcodeScannerManager: React.FC<BarcodeScannerManagerProps> = ({
           {scannedCode && (
             <AnimatePresence mode="wait">
               {/* CASE 1: EXISTING BARCODE IN FIREBASE */}
-              {!isNewReference && existingRef && (
+              {!isNewReference && (matchingRefs.length > 0 || existingRef) && (
                 <motion.div
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -10 }}
                   className="space-y-6"
                 >
-                  {/* Status Banner */}
+                  {/* Status Banner Header */}
                   <div className="bg-emerald-500/10 border-2 border-emerald-500/40 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                     <div className="flex items-start gap-3">
                       <div className="p-2.5 bg-emerald-500 text-white rounded-xl mt-0.5">
                         <CheckCircle2 className="w-6 h-6" />
                       </div>
                       <div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <span className="px-2.5 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider bg-emerald-500 text-white">
-                            Código Já Cadastrado no Firebase
+                            {matchingRefs.length > 1 ? `${matchingRefs.length} Caixas / Cadastros Encontrados em Paralelo` : 'Código Já Cadastrado'}
                           </span>
                           <span className="text-xs font-mono text-slate-500 dark:text-slate-400">
-                            ID: {existingRef.barcode}
+                            Código: {scannedCode}
                           </span>
                         </div>
-                        <h3 className="text-xl font-extrabold text-slate-900 dark:text-white mt-1">
-                          {existingRef.brand} — {existingRef.model}
+                        <h3 className="text-lg font-black text-slate-900 dark:text-white mt-1">
+                          {matchingRefs.length > 1 
+                            ? `Este código possui ${matchingRefs.length} especificações/caixas cadastradas em paralelo.`
+                            : `${existingRef?.brand} — ${existingRef?.model || 'Modelo Cadastrado'}`
+                          }
                         </h3>
                         <p className="text-xs text-slate-600 dark:text-slate-300 mt-0.5">
-                          Cor: <strong className="text-slate-800 dark:text-slate-100">{existingRef.color || 'Padrão'}</strong> | 
-                          Categoria: <strong className="text-slate-800 dark:text-slate-100">{existingRef.productType}</strong> | 
-                          Chegada: <strong className="text-slate-800 dark:text-slate-100">{existingRef.arrivalMonth}/{existingRef.arrivalYear}</strong>
+                          Selecione abaixo qual caixa deseja atualizar ou crie um novo cadastro paralelo para outra caixa com este mesmo código.
                         </p>
                       </div>
-                    </div>
-
-                    <div className="text-right sm:border-l border-emerald-200 dark:border-emerald-800/50 sm:pl-6 pt-2 sm:pt-0 w-full sm:w-auto">
-                      <span className="text-xs text-slate-500 dark:text-slate-400 block">Contagem Anterior</span>
-                      <span className="text-2xl font-black text-emerald-600 dark:text-emerald-400">
-                        {existingRef.total} <span className="text-sm font-normal text-slate-600 dark:text-slate-300">peças</span>
-                      </span>
-                      <span className="text-[11px] text-slate-400 block mt-0.5">
-                        Última atualização: {new Date(existingRef.updatedAt || existingRef.createdAt).toLocaleDateString('pt-BR')}
-                      </span>
                     </div>
                   </div>
 
-                  {/* Confirmation Step */}
+                  {/* Selection List of Parallel Entries */}
                   {!isConfirmedToEdit ? (
-                    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 text-center space-y-4 shadow-sm">
-                      <div className="w-12 h-12 bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 rounded-full flex items-center justify-center mx-auto">
-                        <Check className="w-6 h-6" />
-                      </div>
-                      <div>
-                        <h4 className="text-lg font-bold text-slate-900 dark:text-white">
-                          Confirmação de Leitura
-                        </h4>
-                        <p className="text-sm text-slate-600 dark:text-slate-400 max-w-md mx-auto mt-1">
-                          Localizamos os dados do produto <strong>{existingRef.brand} {existingRef.model}</strong>. Deseja carregar as informações para realizar uma nova contagem ou atualização?
-                        </p>
+                    <div className="space-y-4">
+                      <div className="text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider flex items-center justify-between">
+                        <span>📦 Modelos / Caixas Cadastrados com este Código:</span>
+                        <span className="text-xs font-medium text-slate-500">Total: {matchingRefs.length || 1} item(s)</span>
                       </div>
 
-                      {/* Display breakdown of previous count */}
-                      <div className="bg-slate-50 dark:bg-slate-950 p-4 rounded-xl border border-slate-200 dark:border-slate-800 max-w-lg mx-auto text-left">
-                        <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">
-                          Grade Anterior em Estoque:
-                        </span>
-                        <div className="flex flex-wrap gap-2">
-                          {Object.entries(existingRef.sizes || {}).map(([size, qty]) => (
-                            <div key={size} className="bg-white dark:bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 text-xs flex items-center gap-1.5">
-                              <span className="font-bold text-slate-700 dark:text-slate-300">{size}:</span>
-                              <span className="font-extrabold text-emerald-600 dark:text-emerald-400">{qty} un</span>
+                      <div className="grid grid-cols-1 gap-4">
+                        {(matchingRefs.length > 0 ? matchingRefs : (existingRef ? [existingRef] : [])).map((refItem, idx) => (
+                          <div 
+                            key={`${refItem.brand}_${refItem.model}_${refItem.color}_${idx}`}
+                            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-emerald-500/50 rounded-2xl p-5 shadow-sm space-y-4 transition-all"
+                          >
+                            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-3">
+                              <div>
+                                <div className="flex items-center gap-2 mb-1">
+                                  <span className="px-2.5 py-0.5 rounded text-[11px] font-bold bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                                    Item #{idx + 1}
+                                  </span>
+                                  <span className="text-xs font-bold text-slate-600 dark:text-slate-400">{refItem.brand}</span>
+                                </div>
+                                <h4 className="text-lg font-bold text-slate-900 dark:text-white">
+                                  {refItem.model || 'Sem Modelo Especificado'} {refItem.color ? `— Cor: ${refItem.color}` : ''}
+                                </h4>
+                                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                                  Categoria: <strong>{refItem.productType}</strong> • Chegada: <strong>{refItem.arrivalMonth}/{refItem.arrivalYear}</strong> {refItem.gender ? `• Gênero: ${refItem.gender}` : ''}
+                                </p>
+                              </div>
+
+                              <div className="text-right sm:border-l border-slate-100 dark:border-slate-800 sm:pl-4">
+                                <span className="text-xs text-slate-400 block">Estoque Atual</span>
+                                <span className="text-2xl font-black text-emerald-600 dark:text-emerald-400">
+                                  {refItem.total} <span className="text-xs font-normal text-slate-500">peças</span>
+                                </span>
+                              </div>
                             </div>
-                          ))}
-                        </div>
+
+                            {/* Size Grid breakdown */}
+                            <div>
+                              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
+                                Grade Atual neste Item:
+                              </span>
+                              <div className="flex flex-wrap gap-1.5">
+                                {Object.entries(refItem.sizes || {}).map(([sz, q]) => (
+                                  <span key={sz} className="px-2.5 py-1 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs flex items-center gap-1 font-mono">
+                                    <span className="font-bold text-slate-700 dark:text-slate-300">{sz}:</span>
+                                    <span className="font-black text-emerald-600 dark:text-emerald-400">{q}un</span>
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+
+                            {/* Select Button */}
+                            <div className="pt-1 flex flex-col sm:flex-row gap-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setExistingRef(refItem);
+                                  setIsConfirmedToEdit(true);
+                                  const selectedData = {
+                                    barcode: refItem.barcode || scannedCode || '',
+                                    brand: refItem.brand || '',
+                                    model: refItem.model || '',
+                                    productType: refItem.productType || 'Tênis Adulto Masculino',
+                                    color: refItem.color || '',
+                                    arrivalMonth: refItem.arrivalMonth || (new Date().getMonth() + 1).toString().padStart(2, '0'),
+                                    arrivalYear: refItem.arrivalYear || new Date().getFullYear().toString(),
+                                    gridType: refItem.gridType || 'NUMERIC',
+                                    sizes: refItem.sizes || {},
+                                    total: refItem.total || 0,
+                                    gender: refItem.gender || 'M'
+                                  };
+                                  setFormData(selectedData);
+                                  if (onSelectForCounting) {
+                                    onSelectForCounting(selectedData);
+                                  }
+                                }}
+                                className="w-full sm:w-auto flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-sm transition-all active:scale-95"
+                              >
+                                <Edit2 className="w-4 h-4" />
+                                <span>Atualizar / Continuar Contagem deste Modelo ({refItem.model || 'Sem Modelo'})</span>
+                              </button>
+                            </div>
+                          </div>
+                        ))}
                       </div>
 
-                      <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
-                        <button
-                          onClick={() => setIsConfirmedToEdit(true)}
-                          className="flex items-center gap-2 px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm rounded-xl shadow-lg shadow-emerald-600/20 transition-all"
-                        >
-                          <Edit2 className="w-4 h-4" />
-                          <span>Sim, Carregar para Atualizar Contagem</span>
-                        </button>
-                        <button
-                          onClick={handleClearSearch}
-                          className="px-5 py-3 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-300 font-semibold text-sm rounded-xl transition-all"
-                        >
-                          Buscar Outro Código
-                        </button>
+                      {/* Clean Light Parallel Creation Banner */}
+                      <div className="bg-blue-50/80 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-2xl p-5 space-y-3 shadow-sm">
+                        <div className="flex items-start gap-3">
+                          <div className="p-2.5 bg-brand-blue text-white rounded-xl shrink-0">
+                            <Plus className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-blue-100 text-blue-800 dark:bg-blue-900/60 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
+                              Novo Cadastro em Paralelo (Mesmo Código)
+                            </span>
+                            <h4 className="text-base font-bold text-slate-900 dark:text-white mt-1">
+                              Tenho outra caixa/modelo com este mesmo código de barras ({scannedCode})
+                            </h4>
+                            <p className="text-xs text-slate-600 dark:text-slate-300 mt-0.5">
+                              Se você está contando uma caixa que possui este código de barras, mas é de outra cor, modelo ou especificações diferentes, cadastre em separado.
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-col sm:flex-row items-center gap-2.5 pt-1">
+                          <button
+                            type="button"
+                            onClick={handleCreateNewWithSameBarcode}
+                            className="w-full sm:w-auto px-5 py-3 bg-brand-blue hover:bg-blue-700 text-white font-bold text-xs rounded-xl shadow-sm flex items-center justify-center gap-2 transition-all active:scale-95"
+                          >
+                            <Plus className="w-4 h-4" />
+                            <span>Cadastrar Novo Modelo em Paralelo</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={handleClearSearch}
+                            className="w-full sm:w-auto px-4 py-3 bg-white dark:bg-slate-800 hover:bg-slate-100 text-slate-700 dark:text-slate-300 font-semibold text-xs border border-slate-200 dark:border-slate-700 rounded-xl transition-all"
+                          >
+                            Buscar Outro Código
+                          </button>
+                        </div>
                       </div>
                     </div>
                   ) : (
                     /* FORM TO UPDATE EXISTING REFERENCE */
-                    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 space-y-6 shadow-sm">
-                      <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
-                        <h4 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                          <RefreshCw className="w-4 h-4 text-emerald-600" />
-                          <span>Atualização de Referência e Nova Contagem</span>
-                        </h4>
-                        <span className="text-xs bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 px-2.5 py-1 rounded-md font-mono">
-                          Código: {formData.barcode}
-                        </span>
+                    <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl p-6 sm:p-8 space-y-6 shadow-sm">
+                      {/* Top Header Status & Clear Bar */}
+                      <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 flex items-center gap-1.5 shadow-sm">
+                            <Zap className="w-3.5 h-3.5 text-emerald-600 fill-emerald-600" />
+                            <span>DADOS DO ÚLTIMO LANÇAMENTO MANTIDOS</span>
+                          </span>
+                          {formData.barcode && (
+                            <span className="text-xs font-mono font-bold text-slate-500 bg-slate-100 dark:bg-slate-800 px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700">
+                              Código: {formData.barcode}
+                            </span>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setFormData(prev => ({
+                              ...prev,
+                              brand: '',
+                              model: '',
+                              color: '',
+                              sizes: {},
+                              total: 0
+                            }));
+                          }}
+                          className="text-xs font-bold text-slate-500 hover:text-red-600 flex items-center gap-1.5 bg-slate-50 hover:bg-red-50 border border-slate-200 hover:border-red-200 px-3.5 py-2 rounded-xl transition-all active:scale-95"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
+                          <span>LIMPAR CAMPOS</span>
+                        </button>
+                      </div>
+
+                      {/* Same Barcode / Different Box Helper Banner */}
+                      <div className="bg-blue-50/80 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 p-4 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                        <div className="text-xs text-slate-700 dark:text-slate-200">
+                          <strong className="block font-bold text-blue-700 dark:text-blue-400 mb-0.5">
+                            ℹ️ Código compartilhado ou outra caixa?
+                          </strong>
+                          <span>Se esta caixa possui este mesmo código de barras, mas é de outro modelo ou cor, cadastre como uma nova entrada em separado.</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleCreateNewWithSameBarcode}
+                          className="px-3.5 py-2 bg-brand-blue hover:bg-blue-700 text-white font-bold text-xs rounded-xl shadow-sm transition-all shrink-0 flex items-center gap-1.5 active:scale-95"
+                        >
+                          <Plus className="w-4 h-4" />
+                          <span>Criar Nova Entrada em Separado</span>
+                        </button>
                       </div>
 
                       {/* Product Metadata Fields */}
-                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-                        <div>
-                          <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                            Código de Barras *
+                      <div className="space-y-5">
+                        {/* MARCA */}
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">
+                            MARCA
                           </label>
                           <div className="relative">
                             <input
                               type="text"
-                              value={formData.barcode}
-                              onChange={(e) => setFormData(prev => ({ ...prev, barcode: e.target.value }))}
-                              placeholder="Código de barras"
-                              className="w-full pl-9 pr-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-sm font-mono font-bold text-slate-900 dark:text-white focus:ring-2 focus:ring-emerald-500 outline-none"
+                              list="brand-suggestions-update"
+                              value={formData.brand}
+                              onChange={(e) => setFormData(prev => ({ ...prev, brand: e.target.value }))}
+                              placeholder="Digite ou selecione a marca..."
+                              className="w-full p-4 pr-12 bg-slate-50/80 dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800 focus:border-brand-accent focus:bg-white rounded-2xl font-bold text-lg text-slate-900 dark:text-white transition-all outline-none"
                             />
-                            <Barcode className="w-4 h-4 text-slate-400 absolute left-2.5 top-2.5" />
+                            <datalist id="brand-suggestions-update">
+                              {DEFAULT_BRANDS_LIST.map(b => (
+                                <option key={b} value={b} />
+                              ))}
+                            </datalist>
+                            <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-brand-blue">
+                              <LayoutGrid className="w-5 h-5" />
+                            </div>
                           </div>
                         </div>
 
-                        <div>
-                          <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                            Marca *
+                        {/* PÚBLICO / GÊNERO */}
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">
+                            PÚBLICO / GÊNERO
                           </label>
-                          <input
-                            type="text"
-                            value={formData.brand}
-                            onChange={(e) => setFormData(prev => ({ ...prev, brand: e.target.value }))}
-                            className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-sm font-semibold text-slate-900 dark:text-white"
-                          />
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 bg-slate-50/80 dark:bg-slate-950 p-2 rounded-2xl border border-slate-200/80 dark:border-slate-800">
+                            {[
+                              { id: 'M', code: 'M', label: 'MASCULINO', activeClass: 'border-2 border-blue-500 bg-white text-blue-700 font-black shadow-sm' },
+                              { id: 'F', code: 'F', label: 'FEMININO', activeClass: 'border-2 border-pink-500 bg-white text-pink-700 font-black shadow-sm' },
+                              { id: 'IM', code: 'IM', label: 'INFANTIL MASC.', activeClass: 'border-2 border-cyan-500 bg-white text-cyan-700 font-black shadow-sm' },
+                              { id: 'IF', code: 'IF', label: 'INFANTIL FEM.', activeClass: 'border-2 border-purple-500 bg-white text-purple-700 font-black shadow-sm' },
+                            ].map(opt => {
+                              const isSelected = formData.gender === opt.id;
+                              return (
+                                <button
+                                  key={opt.id}
+                                  type="button"
+                                  onClick={() => {
+                                    const newGender = formData.gender === opt.id ? '' : opt.id;
+                                    const newProductType = syncProductTypeWithGender(formData.productType, newGender);
+                                    setFormData(prev => ({ 
+                                      ...prev, 
+                                      gender: newGender,
+                                      productType: newProductType
+                                    }));
+                                  }}
+                                  className={`p-3 rounded-xl transition-all flex items-center gap-2.5 text-left ${
+                                    isSelected 
+                                      ? opt.activeClass 
+                                      : 'bg-white/80 dark:bg-slate-900 hover:bg-white text-slate-600 dark:text-slate-300 border border-slate-200/60 dark:border-slate-800'
+                                  }`}
+                                >
+                                  <span className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-black shrink-0 border ${
+                                    isSelected ? 'bg-slate-100 text-slate-900 border-slate-300' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 border-slate-200'
+                                  }`}>
+                                    {opt.code}
+                                  </span>
+                                  <span className="text-xs font-black tracking-tight leading-none uppercase">
+                                    {opt.label}
+                                  </span>
+                                </button>
+                              );
+                            })}
+                          </div>
                         </div>
 
-                        <div>
-                          <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                            Modelo *
-                          </label>
-                          <input
-                            type="text"
-                            value={formData.model}
-                            onChange={(e) => setFormData(prev => ({ ...prev, model: e.target.value }))}
-                            className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-sm font-semibold text-slate-900 dark:text-white"
-                          />
+                        {/* MODELO & COR */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div className="space-y-1.5">
+                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">
+                              MODELO
+                            </label>
+                            <input
+                              type="text"
+                              value={formData.model}
+                              onChange={(e) => setFormData(prev => ({ ...prev, model: e.target.value }))}
+                              placeholder="Ex: Rasteirinha 173-019-01"
+                              className="w-full p-4 bg-slate-50/80 dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800 focus:border-brand-accent focus:bg-white rounded-2xl font-bold text-lg text-slate-900 dark:text-white transition-all outline-none"
+                            />
+                          </div>
+
+                          <div className="space-y-1.5">
+                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">
+                              COR
+                            </label>
+                            <input
+                              type="text"
+                              value={formData.color}
+                              onChange={(e) => setFormData(prev => ({ ...prev, color: e.target.value }))}
+                              placeholder="Ex: Branco, Beige Milk"
+                              className="w-full p-4 bg-slate-50/80 dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800 focus:border-brand-accent focus:bg-white rounded-2xl font-bold text-lg text-slate-900 dark:text-white transition-all outline-none"
+                            />
+                          </div>
                         </div>
 
-                        <div>
-                          <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                            Cor / Descrição
-                          </label>
-                          <input
-                            type="text"
-                            value={formData.color}
-                            onChange={(e) => setFormData(prev => ({ ...prev, color: e.target.value }))}
-                            className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-sm text-slate-900 dark:text-white"
-                          />
-                        </div>
+                        {/* MÊS CHEGADA & ANO CHEGADA */}
+                        <div className="grid grid-cols-2 gap-4">
+                          <div className="space-y-1.5">
+                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">
+                              MÊS CHEGADA
+                            </label>
+                            <select
+                              value={formData.arrivalMonth}
+                              onChange={(e) => setFormData(prev => ({ ...prev, arrivalMonth: e.target.value }))}
+                              className="w-full p-4 bg-slate-50/80 dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800 focus:border-brand-accent focus:bg-white rounded-2xl font-bold text-lg text-slate-900 dark:text-white transition-all outline-none appearance-none"
+                            >
+                              <option value="">Selecione...</option>
+                              {MONTHS.map(m => (
+                                <option key={m} value={m}>{m}</option>
+                              ))}
+                            </select>
+                          </div>
 
-                        <div>
-                          <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                            Mês de Chegada
-                          </label>
-                          <select
-                            value={formData.arrivalMonth}
-                            onChange={(e) => setFormData(prev => ({ ...prev, arrivalMonth: e.target.value }))}
-                            className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-sm text-slate-900 dark:text-white"
-                          >
-                            <option value="">Selecione o mês...</option>
-                            {MONTHS.map(m => (
-                              <option key={m} value={m}>{m}</option>
-                            ))}
-                          </select>
-                        </div>
-
-                        <div>
-                          <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                            Ano de Chegada
-                          </label>
-                          <select
-                            value={formData.arrivalYear}
-                            onChange={(e) => setFormData(prev => ({ ...prev, arrivalYear: e.target.value }))}
-                            className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-sm text-slate-900 dark:text-white"
-                          >
-                            {YEARS.map(y => (
-                              <option key={y} value={y}>{y}</option>
-                            ))}
-                          </select>
+                          <div className="space-y-1.5">
+                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">
+                              ANO CHEGADA
+                            </label>
+                            <select
+                              value={formData.arrivalYear}
+                              onChange={(e) => setFormData(prev => ({ ...prev, arrivalYear: e.target.value }))}
+                              className="w-full p-4 bg-slate-50/80 dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800 focus:border-brand-accent focus:bg-white rounded-2xl font-bold text-lg text-slate-900 dark:text-white transition-all outline-none appearance-none"
+                            >
+                              {YEARS.map(y => (
+                                <option key={y} value={y}>{y}</option>
+                              ))}
+                            </select>
+                          </div>
                         </div>
                       </div>
 
@@ -979,124 +1175,173 @@ export const BarcodeScannerManager: React.FC<BarcodeScannerManagerProps> = ({
                   </div>
 
                   {/* INITIAL REGISTRATION FORM */}
-                  <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 space-y-6 shadow-sm">
-                    <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
-                      <h4 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                        <Plus className="w-4 h-4 text-red-600" />
-                        <span>Formulário de Cadastro Inicial</span>
-                      </h4>
-                      <span className="text-xs bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 px-2.5 py-1 rounded-md font-mono">
-                        Chave Firebase: {formData.barcode}
-                      </span>
+                  <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl p-6 sm:p-8 space-y-6 shadow-sm">
+                    {/* Top Header Status & Clear Bar */}
+                    <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider bg-amber-50 text-amber-800 dark:bg-amber-950 dark:text-amber-300 border border-amber-300 dark:border-amber-800 flex items-center gap-1.5 shadow-sm">
+                          <Plus className="w-3.5 h-3.5 text-amber-600" />
+                          <span>NOVO CADASTRO DE REFERÊNCIA</span>
+                        </span>
+                        {formData.barcode && (
+                          <span className="text-xs font-mono font-bold text-slate-500 bg-slate-100 dark:bg-slate-800 px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700">
+                            Código: {formData.barcode}
+                          </span>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFormData(prev => ({
+                            ...prev,
+                            brand: '',
+                            model: '',
+                            color: '',
+                            sizes: {},
+                            total: 0
+                          }));
+                        }}
+                        className="text-xs font-bold text-slate-500 hover:text-red-600 flex items-center gap-1.5 bg-slate-50 hover:bg-red-50 border border-slate-200 hover:border-red-200 px-3.5 py-2 rounded-xl transition-all active:scale-95"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span>LIMPAR CAMPOS</span>
+                      </button>
                     </div>
 
                     {/* Inputs */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-                      <div>
-                        <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                          Código de Barras *
+                    <div className="space-y-5">
+                      {/* MARCA */}
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">
+                          MARCA
                         </label>
                         <div className="relative">
                           <input
                             type="text"
-                            value={formData.barcode}
-                            onChange={(e) => setFormData(prev => ({ ...prev, barcode: e.target.value }))}
-                            placeholder="Digite ou bipe o código de barras"
-                            className="w-full pl-9 pr-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-sm font-mono font-bold text-slate-900 dark:text-white focus:ring-2 focus:ring-red-500 outline-none"
+                            list="brand-suggestions"
+                            value={formData.brand}
+                            onChange={(e) => setFormData(prev => ({ ...prev, brand: e.target.value }))}
+                            placeholder="Digite ou selecione a marca..."
+                            className="w-full p-4 pr-12 bg-slate-50/80 dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800 focus:border-brand-accent focus:bg-white rounded-2xl font-bold text-lg text-slate-900 dark:text-white transition-all outline-none"
                           />
-                          <Barcode className="w-4 h-4 text-slate-400 absolute left-2.5 top-2.5" />
+                          <datalist id="brand-suggestions">
+                            {DEFAULT_BRANDS_LIST.map(b => (
+                              <option key={b} value={b} />
+                            ))}
+                          </datalist>
+                          <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-brand-blue">
+                            <LayoutGrid className="w-5 h-5" />
+                          </div>
                         </div>
                       </div>
 
-                      <div>
-                        <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                          Marca *
+                      {/* PÚBLICO / GÊNERO */}
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">
+                          PÚBLICO / GÊNERO
                         </label>
-                        <input
-                          type="text"
-                          list="brand-suggestions"
-                          value={formData.brand}
-                          onChange={(e) => setFormData(prev => ({ ...prev, brand: e.target.value }))}
-                          placeholder="Digite ou selecione a marca"
-                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-sm font-semibold text-slate-900 dark:text-white focus:ring-2 focus:ring-red-500 outline-none"
-                        />
-                        <datalist id="brand-suggestions">
-                          {DEFAULT_BRANDS_LIST.map(b => (
-                            <option key={b} value={b} />
-                          ))}
-                        </datalist>
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 bg-slate-50/80 dark:bg-slate-950 p-2 rounded-2xl border border-slate-200/80 dark:border-slate-800">
+                          {[
+                            { id: 'M', code: 'M', label: 'MASCULINO', activeClass: 'border-2 border-blue-500 bg-white text-blue-700 font-black shadow-sm' },
+                            { id: 'F', code: 'F', label: 'FEMININO', activeClass: 'border-2 border-pink-500 bg-white text-pink-700 font-black shadow-sm' },
+                            { id: 'IM', code: 'IM', label: 'INFANTIL MASC.', activeClass: 'border-2 border-cyan-500 bg-white text-cyan-700 font-black shadow-sm' },
+                            { id: 'IF', code: 'IF', label: 'INFANTIL FEM.', activeClass: 'border-2 border-purple-500 bg-white text-purple-700 font-black shadow-sm' },
+                          ].map(opt => {
+                            const isSelected = formData.gender === opt.id;
+                            return (
+                              <button
+                                key={opt.id}
+                                type="button"
+                                onClick={() => {
+                                  const newGender = formData.gender === opt.id ? '' : opt.id;
+                                  const newProductType = syncProductTypeWithGender(formData.productType, newGender);
+                                  setFormData(prev => ({ 
+                                    ...prev, 
+                                    gender: newGender,
+                                    productType: newProductType
+                                  }));
+                                }}
+                                className={`p-3 rounded-xl transition-all flex items-center gap-2.5 text-left ${
+                                  isSelected 
+                                    ? opt.activeClass 
+                                    : 'bg-white/80 dark:bg-slate-900 hover:bg-white text-slate-600 dark:text-slate-300 border border-slate-200/60 dark:border-slate-800'
+                                }`}
+                              >
+                                <span className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-black shrink-0 border ${
+                                  isSelected ? 'bg-slate-100 text-slate-900 border-slate-300' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 border-slate-200'
+                                }`}>
+                                  {opt.code}
+                                </span>
+                                <span className="text-xs font-black tracking-tight leading-none uppercase">
+                                  {opt.label}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
                       </div>
 
-                      <div>
-                        <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                          Modelo / Referência *
-                        </label>
-                        <input
-                          type="text"
-                          value={formData.model}
-                          onChange={(e) => setFormData(prev => ({ ...prev, model: e.target.value }))}
-                          placeholder="Ex: Revolution 7, Sapatilha Comfort"
-                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-sm font-semibold text-slate-900 dark:text-white focus:ring-2 focus:ring-red-500 outline-none"
-                        />
+                      {/* MODELO & COR */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">
+                            MODELO
+                          </label>
+                          <input
+                            type="text"
+                            value={formData.model}
+                            onChange={(e) => setFormData(prev => ({ ...prev, model: e.target.value }))}
+                            placeholder="Ex: Rasteirinha 173-019-01"
+                            className="w-full p-4 bg-slate-50/80 dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800 focus:border-brand-accent focus:bg-white rounded-2xl font-bold text-lg text-slate-900 dark:text-white transition-all outline-none"
+                          />
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">
+                            COR
+                          </label>
+                          <input
+                            type="text"
+                            value={formData.color}
+                            onChange={(e) => setFormData(prev => ({ ...prev, color: e.target.value }))}
+                            placeholder="Ex: Branco, Beige Milk"
+                            className="w-full p-4 bg-slate-50/80 dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800 focus:border-brand-accent focus:bg-white rounded-2xl font-bold text-lg text-slate-900 dark:text-white transition-all outline-none"
+                          />
+                        </div>
                       </div>
 
-                      <div>
-                        <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                          Cor / Variante
-                        </label>
-                        <input
-                          type="text"
-                          value={formData.color}
-                          onChange={(e) => setFormData(prev => ({ ...prev, color: e.target.value }))}
-                          placeholder="Ex: Preto, Nude, Branco"
-                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-sm text-slate-900 dark:text-white outline-none"
-                        />
-                      </div>
+                      {/* MÊS CHEGADA & ANO CHEGADA */}
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">
+                            MÊS CHEGADA
+                          </label>
+                          <select
+                            value={formData.arrivalMonth}
+                            onChange={(e) => setFormData(prev => ({ ...prev, arrivalMonth: e.target.value }))}
+                            className="w-full p-4 bg-slate-50/80 dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800 focus:border-brand-accent focus:bg-white rounded-2xl font-bold text-lg text-slate-900 dark:text-white transition-all outline-none appearance-none"
+                          >
+                            <option value="">Selecione...</option>
+                            {MONTHS.map(m => (
+                              <option key={m} value={m}>{m}</option>
+                            ))}
+                          </select>
+                        </div>
 
-                      <div>
-                        <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                          Tipo de Produto / Categoria
-                        </label>
-                        <select
-                          value={formData.productType}
-                          onChange={(e) => setFormData(prev => ({ ...prev, productType: e.target.value }))}
-                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-sm text-slate-900 dark:text-white outline-none"
-                        >
-                          {PRODUCT_TYPES.map(t => (
-                            <option key={t} value={t}>{t}</option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                          Mês de Chegada
-                        </label>
-                        <select
-                          value={formData.arrivalMonth}
-                          onChange={(e) => setFormData(prev => ({ ...prev, arrivalMonth: e.target.value }))}
-                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-sm text-slate-900 dark:text-white outline-none"
-                        >
-                          <option value="">Selecione o mês...</option>
-                          {MONTHS.map(m => (
-                            <option key={m} value={m}>{m}</option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                          Ano de Chegada
-                        </label>
-                        <select
-                          value={formData.arrivalYear}
-                          onChange={(e) => setFormData(prev => ({ ...prev, arrivalYear: e.target.value }))}
-                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-sm text-slate-900 dark:text-white outline-none"
-                        >
-                          {YEARS.map(y => (
-                            <option key={y} value={y}>{y}</option>
-                          ))}
-                        </select>
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">
+                            ANO CHEGADA
+                          </label>
+                          <select
+                            value={formData.arrivalYear}
+                            onChange={(e) => setFormData(prev => ({ ...prev, arrivalYear: e.target.value }))}
+                            className="w-full p-4 bg-slate-50/80 dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800 focus:border-brand-accent focus:bg-white rounded-2xl font-bold text-lg text-slate-900 dark:text-white transition-all outline-none appearance-none"
+                          >
+                            {YEARS.map(y => (
+                              <option key={y} value={y}>{y}</option>
+                            ))}
+                          </select>
+                        </div>
                       </div>
                     </div>
 

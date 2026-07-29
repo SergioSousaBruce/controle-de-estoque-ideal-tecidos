@@ -111,6 +111,7 @@ export interface ShoeBrand {
 
 export interface InventoryCount {
   id: string;
+  barcode?: string;
   productType: string;
   model: string;
   brand?: string;
