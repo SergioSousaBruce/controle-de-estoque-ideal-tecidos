@@ -135,14 +135,14 @@ export const BarcodeScannerManager: React.FC<BarcodeScannerManagerProps> = ({
     };
   }, []);
 
-  // Auto-focus input on mount or tab change
+  // Auto-focus input on mount, tab change, or when locked reference changes
   useEffect(() => {
     if (activeTab === 'SCAN') {
       setTimeout(() => barcodeInputRef.current?.focus(), 150);
     } else {
       loadDatabaseList();
     }
-  }, [activeTab]);
+  }, [activeTab, activeLockedReference]);
 
   const loadDatabaseList = async () => {
     setIsLoadingDb(true);
@@ -510,26 +510,21 @@ export const BarcodeScannerManager: React.FC<BarcodeScannerManagerProps> = ({
       {activeTab === 'SCAN' && (
         <div className="space-y-6">
           {activeLockedReference && (
-            <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-blue-900 text-white p-4 sm:p-5 rounded-2xl shadow-xl border border-indigo-500/30 relative overflow-hidden">
-              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+            <div className="bg-gradient-to-r from-red-950 via-slate-900 to-red-900 text-white p-5 rounded-2xl shadow-xl border border-red-500/30 relative overflow-hidden">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 relative z-10">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-emerald-500/20 text-emerald-400 rounded-xl flex items-center justify-center border border-emerald-500/30 shrink-0">
-                    <Lock size={20} strokeWidth={2.5} />
+                  <div className="w-12 h-12 bg-red-500/20 text-red-400 rounded-2xl flex items-center justify-center border border-red-500/30 shrink-0">
+                    <Barcode size={26} strokeWidth={2.5} />
                   </div>
                   <div>
                     <div className="flex items-center gap-2">
-                      <span className="text-[10px] font-black uppercase tracking-widest text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
-                        Contagem da Marca em Andamento
+                      <span className="text-[10px] font-black uppercase tracking-widest text-red-300 bg-red-500/20 px-2.5 py-0.5 rounded-md border border-red-500/30 flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-red-400 animate-pulse"></span>
+                        Contagem Sequencial por Marca
                       </span>
-                      {activeLockedReference.barcode && (
-                        <span className="font-mono text-xs font-bold text-white/70">
-                          • {activeLockedReference.barcode}
-                        </span>
-                      )}
                     </div>
-                    <p className="text-sm font-black uppercase text-white mt-0.5">
-                      Marca: <span className="text-emerald-300">{activeLockedReference.brand || 'Não Informada'}</span>
-                      {activeLockedReference.model && <span className="text-white/80 font-normal ml-2">• Ref: {activeLockedReference.model}</span>}
+                    <p className="text-base font-black uppercase text-white mt-1">
+                      Bipe o código da próxima referência de: <span className="text-red-400 text-lg">{activeLockedReference.brand || 'Marca Ativa'}</span>
                     </p>
                   </div>
                 </div>
@@ -538,10 +533,10 @@ export const BarcodeScannerManager: React.FC<BarcodeScannerManagerProps> = ({
                   <button
                     type="button"
                     onClick={onFinishActiveReference}
-                    className="w-full sm:w-auto px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white font-black text-xs uppercase tracking-wider rounded-xl shadow-md flex items-center justify-center gap-2 transition-all active:scale-95 shrink-0"
+                    className="w-full sm:w-auto px-5 py-3 bg-emerald-500 hover:bg-emerald-600 text-white font-black text-xs uppercase tracking-wider rounded-xl shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2 transition-all active:scale-95 shrink-0 border border-emerald-400/30"
                   >
-                    <CheckCircle2 size={16} />
-                    Concluir Marca Atual
+                    <CheckCircle2 size={18} />
+                    Concluir Marca {activeLockedReference.brand ? `(${activeLockedReference.brand})` : ''}
                   </button>
                 )}
               </div>

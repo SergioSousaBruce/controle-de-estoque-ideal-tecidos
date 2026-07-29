@@ -378,31 +378,42 @@ const App: React.FC = () => {
   };
 
   const handleSelectBarcodeForCounting = (itemData: Partial<InventoryCount> & { barcode: string }) => {
-    // If a reference is currently locked
+    // If a reference/brand is currently locked
     if (activeLockedReference) {
-      const isSameBarcode = itemData.barcode === activeLockedReference.barcode;
-      const isSameBrandModel = (
-        itemData.brand &&
-        activeLockedReference.brand &&
-        itemData.brand.toLowerCase() === activeLockedReference.brand.toLowerCase() &&
-        (!itemData.model || !activeLockedReference.model || itemData.model.toLowerCase() === activeLockedReference.model.toLowerCase())
-      );
+      const activeBrandClean = (activeLockedReference.brand || '').toLowerCase().trim();
+      const itemBrandClean = (itemData.brand || '').toLowerCase().trim();
 
-      if (isSameBarcode || isSameBrandModel) {
-        // Same active brand/reference! Continue on current form
-        setFormData(prev => ({
-          ...prev,
-          ...itemData,
-          barcode: itemData.barcode || prev.barcode,
-          gender: itemData.gender || prev.gender || getGenderFromProductType(itemData.productType) || 'M',
-          productType: itemData.productType || prev.productType || getDefaultProductTypeFromGender(itemData.gender) || 'Calçado'
-        }));
-        showToast(`Continuando na contagem de ${activeLockedReference.brand || 'Referência Ativa'}`, 'success');
-        setCurrentView(AppView.IDENTIFY);
+      const isSameBrand = !itemBrandClean || !activeBrandClean || itemBrandClean === activeBrandClean;
+
+      if (isSameBrand) {
+        const finalBrand = itemData.brand || activeLockedReference.brand || '';
+        const calculatedGender = itemData.gender || activeLockedReference.gender || getGenderFromProductType(itemData.productType, '') || 'M';
+        const calculatedProductType = itemData.productType || activeLockedReference.productType || getDefaultProductTypeFromGender(calculatedGender, '') || 'Tênis Adulto Masculino';
+
+        const updatedLock = {
+          barcode: itemData.barcode,
+          brand: finalBrand,
+          model: itemData.model || '',
+          color: itemData.color || '',
+          productType: calculatedProductType,
+          arrivalMonth: itemData.arrivalMonth || activeLockedReference.arrivalMonth || (new Date().getMonth() + 1).toString().padStart(2, '0'),
+          arrivalYear: itemData.arrivalYear || activeLockedReference.arrivalYear || new Date().getFullYear().toString(),
+          gridType: itemData.gridType || activeLockedReference.gridType || 'NUMERIC',
+          sizes: itemData.sizes || {},
+          total: itemData.total || 0,
+          gender: calculatedGender
+        };
+
+        setActiveLockedReference(updatedLock);
+        setFormData(updatedLock);
+
+        const destinationView = updatedLock.model && updatedLock.model.trim() ? AppView.COUNT : AppView.IDENTIFY;
+        setCurrentView(destinationView);
+        showToast(`Referência ${updatedLock.model || updatedLock.barcode} carregada para ${finalBrand}!`, 'success');
         window.scrollTo({ top: 0, behavior: 'smooth' });
         return;
       } else {
-        // Different brand/reference scanned while reference is locked! Open modal prompt
+        // Different brand scanned! Prompt user
         setMismatchModalData({
           newScannedData: itemData
         });
@@ -431,7 +442,8 @@ const App: React.FC = () => {
     setActiveLockedReference(newLock);
     setFormData(newLock);
     setEditingId(null);
-    setCurrentView(AppView.IDENTIFY);
+    const destinationView = newLock.model && newLock.model.trim() ? AppView.COUNT : AppView.IDENTIFY;
+    setCurrentView(destinationView);
     showToast(`🔒 Contagem da marca/referência ${newLock.brand || 'Nova Marca'} iniciada!`, 'success');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -650,6 +662,32 @@ const App: React.FC = () => {
     setEditingId(null);
     setAuthError(null);
     setCurrentView(AppView.IDENTIFY);
+  };
+
+  const handleSaveAndScanNextReference = async () => {
+    const currentBrand = formData.brand || activeLockedReference?.brand || '';
+    const success = await saveInventory();
+    if (success) {
+      const nextLock = {
+        barcode: '',
+        brand: currentBrand,
+        model: '',
+        color: '',
+        productType: formData.productType || 'Tênis Adulto Masculino',
+        arrivalMonth: (new Date().getMonth() + 1).toString().padStart(2, '0'),
+        arrivalYear: new Date().getFullYear().toString(),
+        gridType: formData.gridType || 'NUMERIC',
+        sizes: {},
+        total: 0,
+        gender: formData.gender || 'M'
+      };
+      setActiveLockedReference(nextLock);
+      setFormData(nextLock);
+      setEditingId(null);
+      setCurrentView(AppView.BARCODE_FIREBASE);
+      showToast(`Salvo! Bipe o código da próxima referência da marca ${currentBrand || 'geral'}`, 'success');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
   };
 
   const handleEdit = (count: InventoryCount) => {
@@ -2134,29 +2172,27 @@ const App: React.FC = () => {
                 </div>
 
                 <div className="flex flex-col gap-3 relative z-10 w-full">
-                  {/* Option 1: Save & Continue with same brand */}
+                  {/* Option 1: Save & Scan Next Reference */}
                   <motion.button 
                     whileHover={{ scale: 1.01 }}
                     whileTap={{ scale: 0.99 }}
                     disabled={isSaving}
-                    onClick={async () => {
-                      const currentBrand = formData.brand || '';
-                      const success = await saveInventory();
-                      if (success) {
-                        handleStartWithSameBrand(currentBrand);
-                        showToast(`Salvo! Continuando na marca ${currentBrand}`);
-                      }
-                    }}
-                    className="w-full bg-brand-red hover:brightness-110 shadow-xl shadow-brand-red/20 text-white py-5 rounded-[1.5rem] active:scale-[0.98] transition-all flex items-center justify-center gap-3 disabled:opacity-50 font-display"
+                    onClick={handleSaveAndScanNextReference}
+                    className="w-full bg-gradient-to-r from-red-600 via-brand-red to-rose-700 hover:brightness-110 shadow-xl shadow-brand-red/25 text-white py-5 rounded-[1.5rem] active:scale-[0.98] transition-all flex items-center justify-center gap-3 disabled:opacity-50 font-display border border-red-400/30"
                   >
                     {isSaving ? (
-                      <Loader2 size={20} className="animate-spin" />
+                      <Loader2 size={22} className="animate-spin" />
                     ) : (
-                      <TrendingUp size={20} strokeWidth={3} />
+                      <Barcode size={24} strokeWidth={2.5} />
                     )}
-                    <span className="text-xs font-black uppercase tracking-[0.15em]">
-                      {isSaving ? 'Salvando...' : `Salvar e Continuar na marca ${formData.brand || ''}`}
-                    </span>
+                    <div className="text-left leading-tight">
+                      <span className="text-xs font-black uppercase tracking-[0.12em] block">
+                        {isSaving ? 'Salvando...' : 'Salvar e Bipar Próxima Referência'}
+                      </span>
+                      <span className="text-[10px] font-bold text-red-100 uppercase tracking-wider block opacity-90">
+                        {formData.brand ? `Continuar em ${formData.brand} • Bipar Próximo Código` : 'Bipar Próximo Código'}
+                      </span>
+                    </div>
                   </motion.button>
 
                   {/* Option 2: Save & Conclude Brand */}
@@ -2172,37 +2208,56 @@ const App: React.FC = () => {
                           await toggleBrandCompleted(currentBrand, true);
                         }
                         setCurrentView(AppView.INVENTORIES);
-                        showToast(`Marca ${currentBrand || ''} concluída e atualizada no Inventário!`);
+                        showToast(`Marca ${currentBrand || ''} concluída com sucesso!`);
                         window.scrollTo({ top: 0, behavior: 'smooth' });
                       }
                     }}
-                    className="w-full bg-emerald-600 hover:bg-emerald-500 shadow-xl shadow-emerald-600/25 text-white py-5 rounded-[1.5rem] active:scale-[0.98] transition-all flex items-center justify-center gap-3 disabled:opacity-50 font-display"
+                    className="w-full bg-emerald-600 hover:bg-emerald-500 shadow-xl shadow-emerald-600/25 text-white py-4 rounded-[1.5rem] active:scale-[0.98] transition-all flex items-center justify-center gap-3 disabled:opacity-50 font-display"
                   >
                     <CheckCircle2 size={22} strokeWidth={2.5} />
                     <span className="text-xs font-black uppercase tracking-[0.12em]">
-                      Salvar e Concluir Marca (Ver Inventário em Tempo Real)
+                      Salvar e Concluir Contagem Geral da Marca
                     </span>
                   </motion.button>
 
-                  {/* Option 3: Save & Select Other Brands */}
-                  <motion.button 
-                    whileHover={{ scale: 1.01 }}
-                    whileTap={{ scale: 0.99 }}
-                    disabled={isSaving}
-                    onClick={async () => {
-                      const success = await saveInventory();
-                      if (success) {
-                        handleStartNew();
-                        showToast('Salvo! Selecione uma nova marca');
-                      }
-                    }}
-                    className="w-full bg-brand-blue hover:brightness-110 shadow-xl shadow-brand-blue/20 text-white py-5 rounded-[1.5rem] active:scale-[0.98] transition-all flex items-center justify-center gap-3 disabled:opacity-50 font-display"
-                  >
-                    <PlusCircle size={20} strokeWidth={3} />
-                    <span className="text-xs font-black uppercase tracking-[0.15em]">
-                      Salvar e Selecionar Outra Marca
-                    </span>
-                  </motion.button>
+                  <div className="grid grid-cols-2 gap-3 mt-1">
+                    {/* Option 3: Save & Type Model Manually */}
+                    <motion.button 
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      disabled={isSaving}
+                      onClick={async () => {
+                        const currentBrand = formData.brand || '';
+                        const success = await saveInventory();
+                        if (success) {
+                          handleStartWithSameBrand(currentBrand);
+                          showToast(`Salvo! Digite o próximo modelo da marca ${currentBrand}`);
+                        }
+                      }}
+                      className="bg-white/10 hover:bg-white/20 text-white py-3.5 px-3 rounded-[1.2rem] border border-white/10 active:scale-[0.98] transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                    >
+                      <Edit2 size={16} strokeWidth={2.5} />
+                      <span className="text-[10px] font-black uppercase tracking-[0.08em] text-center">Digitar Modelo</span>
+                    </motion.button>
+
+                    {/* Option 4: Save & Select Other Brand */}
+                    <motion.button 
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      disabled={isSaving}
+                      onClick={async () => {
+                        const success = await saveInventory();
+                        if (success) {
+                          handleStartNew();
+                          showToast('Salvo! Selecione uma nova marca');
+                        }
+                      }}
+                      className="bg-white/10 hover:bg-white/20 text-white py-3.5 px-3 rounded-[1.2rem] border border-white/10 active:scale-[0.98] transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                    >
+                      <PlusCircle size={16} strokeWidth={2.5} />
+                      <span className="text-[10px] font-black uppercase tracking-[0.08em] text-center">Outra Marca</span>
+                    </motion.button>
+                  </div>
 
                   <div className="grid grid-cols-2 gap-3 mt-1">
                     {/* Option 3: Save & Go Home */}
