@@ -1,0 +1,46 @@
+/* Mobile responsiveness & touch friendly styles */
+:root {
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+}
+
+html, body {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  overflow-x: hidden;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+/* Custom horizontal scrollbars for mobile tables */
+.overflow-x-auto {
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Ensure text wrapping on small mobile screens */
+h1, h2, h3, h4, h5, h6, p, span, button, th, td, label {
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+/* Touch targets for mobile */
+button, input, select, textarea {
+  min-height: 42px;
+}
+
+/* Ensure SVGs and icons remain centered and constrained */
+svg {
+  flex-shrink: 0;
+}
+
+/* Table scroll indicator */
+.table-responsive-wrapper {
+  position: relative;
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border-radius: 1rem;
+}

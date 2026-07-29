@@ -20,6 +20,7 @@ import {
   CheckCircle2,
   AlertCircle,
   LayoutGrid,
+  BarChart3,
   BrainCircuit,
   TrendingUp,
   AlertTriangle,
@@ -28,8 +29,28 @@ import {
   ExternalLink,
   ClipboardList,
   Eye,
-  Printer
+  Printer,
+  Barcode,
+  Lock,
+  Unlock,
+  RotateCcw
 } from 'lucide-react';
+import { OfflineSyncBadge } from './src/components/OfflineSyncBadge';
+import { queueOfflineCount } from './src/services/offlineSyncService';
+import { saveBarcodeReference, getReferenceByBarcode, sanitizeBarcode, preloadBarcodeCache } from './src/services/barcodeFirebaseService';
+import { recordStockMovement } from './src/services/stockMovementService';
+
+// Lazy loading heavy modals for optimal initial boot performance
+const ReportsModule = React.lazy(() => import('./src/components/ReportsModule').then(m => ({ default: m.ReportsModule })));
+const DashboardModule = React.lazy(() => import('./src/components/DashboardModule').then(m => ({ default: m.DashboardModule })));
+const InventoryModeModule = React.lazy(() => import('./src/components/InventoryModeModule').then(m => ({ default: m.InventoryModeModule })));
+const StockMovementHistoryModule = React.lazy(() => import('./src/components/StockMovementHistoryModule').then(m => ({ default: m.StockMovementHistoryModule })));
+const ContinuousScannerModal = React.lazy(() => import('./src/components/ContinuousScannerModal').then(m => ({ default: m.ContinuousScannerModal })));
+const LabelGeneratorModal = React.lazy(() => import('./src/components/LabelGeneratorModal').then(m => ({ default: m.LabelGeneratorModal })));
+const DivergenceReportModal = React.lazy(() => import('./src/components/DivergenceReportModal').then(m => ({ default: m.DivergenceReportModal })));
+const ErpExporterModal = React.lazy(() => import('./src/components/ErpExporterModal').then(m => ({ default: m.ErpExporterModal })));
+const BarcodeScannerManager = React.lazy(() => import('./src/components/BarcodeScannerManager').then(m => ({ default: m.BarcodeScannerManager })));
+import { Zap, Tag, FileSpreadsheet } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { GoogleGenAI } from "@google/genai";
@@ -67,9 +88,10 @@ import {
   writeBatch,
   getDocs
 } from 'firebase/firestore';
-import { AppView, InventoryCount, SizeGridType } from './types';
-import { PRODUCT_TYPES, LETTER_SIZES, NUMERIC_SIZES, MONTHS, YEARS } from './constants';
+import { AppView, InventoryCount, SizeGridType, ShoeProduct, ShoeInventory } from './types';
+import { PRODUCT_TYPES, LETTER_SIZES, NUMERIC_SIZES, MONTHS, YEARS, getGenderFromProductType, getDefaultProductTypeFromGender, syncProductTypeWithGender } from './constants';
 import { DEFAULT_BRANDS_LIST } from './src/services/inventoryDb';
+import { computeBrandSizeAnalysis } from './src/utils/brandAnalysis';
 
 const App: React.FC = () => {
   // Auth state
@@ -101,6 +123,8 @@ const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<AppView>(AppView.HOME);
   const [viewingPdfItem, setViewingPdfItem] = useState<InventoryCount | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
+
+  // Clean Architecture Module States
   const [deleteModal, setDeleteModal] = useState<{ isOpen: boolean; id: string | 'ALL' }>({
     isOpen: false,
     id: ''
@@ -109,6 +133,40 @@ const App: React.FC = () => {
     message: '',
     type: null
   });
+
+  // New Features Modal States
+  const [isContinuousModalOpen, setIsContinuousModalOpen] = useState(false);
+  const [isLabelModalOpen, setIsLabelModalOpen] = useState(false);
+  const [isDivergenceModalOpen, setIsDivergenceModalOpen] = useState(false);
+  const [isErpExporterModalOpen, setIsErpExporterModalOpen] = useState(false);
+
+  // Save Continuous Count Helper for High-Speed USB Scanner
+  const saveContinuousCount = async (data: Omit<InventoryCount, 'id' | 'createdAt' | 'userId'>) => {
+    const inventoryRef = collection(db, 'inventory');
+    const newDoc = doc(inventoryRef);
+    const finalCount: InventoryCount = {
+      ...data,
+      id: newDoc.id,
+      createdAt: Date.now(),
+      userId: currentUserId
+    };
+
+    if (!navigator.onLine) {
+      queueOfflineCount(finalCount);
+      setCounts(prev => [finalCount, ...prev]);
+      return finalCount;
+    }
+
+    try {
+      await setDoc(newDoc, finalCount);
+      setCounts(prev => [finalCount, ...prev]);
+      return finalCount;
+    } catch (err) {
+      queueOfflineCount(finalCount);
+      setCounts(prev => [finalCount, ...prev]);
+      return finalCount;
+    }
+  };
   
   const [newSizeInput, setNewSizeInput] = useState('');
   
@@ -198,20 +256,190 @@ const App: React.FC = () => {
   const inProgressCount = useMemo(() => brandStats.filter(b => b.status === 'IN_PROGRESS').length, [brandStats]);
   const pendingCount = useMemo(() => brandStats.filter(b => b.status === 'PENDING').length, [brandStats]);
   
-  // Form state
+  // Form state & persistent last entered shoe info template
+  const [lastShoeInfo, setLastShoeInfo] = useState<{
+    brand?: string;
+    gender?: string;
+    model?: string;
+    color?: string;
+    productType?: string;
+    arrivalMonth?: string;
+    arrivalYear?: string;
+    gridType?: SizeGridType;
+  }>(() => {
+    try {
+      const saved = localStorage.getItem('ideal_last_shoe_info');
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
+
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [formData, setFormData] = useState<Partial<InventoryCount>>({
-    productType: '',
-    model: '',
-    brand: '',
-    color: '',
-    arrivalMonth: '',
-    arrivalYear: '',
-    gridType: 'LETTER',
+  const [formData, setFormData] = useState<Partial<InventoryCount> & { barcode?: string }>(() => ({
+    barcode: '',
+    productType: lastShoeInfo.productType || '',
+    model: lastShoeInfo.model || '',
+    brand: lastShoeInfo.brand || '',
+    color: lastShoeInfo.color || '',
+    arrivalMonth: lastShoeInfo.arrivalMonth || (new Date().getMonth() + 1).toString().padStart(2, '0'),
+    arrivalYear: lastShoeInfo.arrivalYear || new Date().getFullYear().toString(),
+    gridType: lastShoeInfo.gridType || 'LETTER',
     sizes: {},
     total: 0,
-    gender: ''
-  });
+    gender: lastShoeInfo.gender || 'M'
+  }));
+
+  // Active locked reference & mismatch modal states
+  const [activeLockedReference, setActiveLockedReference] = useState<{
+    barcode: string;
+    brand: string;
+    model: string;
+    color?: string;
+    productType?: string;
+    arrivalMonth?: string;
+    arrivalYear?: string;
+    gridType?: SizeGridType;
+    sizes?: Record<string, number>;
+    total?: number;
+    gender?: string;
+  } | null>(null);
+
+  const [mismatchModalData, setMismatchModalData] = useState<{
+    newScannedData: Partial<InventoryCount> & { barcode: string };
+  } | null>(null);
+
+  const handleFinishActiveReference = async () => {
+    if (activeLockedReference) {
+      if (formData.brand || formData.barcode || (formData.total && formData.total > 0)) {
+        try {
+          await saveInventory();
+        } catch (err) {
+          console.warn("Auto save on finish reference warning:", err);
+        }
+      }
+      const finishedBrand = activeLockedReference.brand || 'Referência';
+      setActiveLockedReference(null);
+      setFormData({
+        barcode: '',
+        productType: '',
+        model: '',
+        brand: '',
+        color: '',
+        arrivalMonth: '',
+        arrivalYear: '',
+        gridType: 'LETTER',
+        sizes: {},
+        total: 0,
+        gender: ''
+      });
+      setEditingId(null);
+      showToast(`Contagem de ${finishedBrand} concluída! Próxima marca liberada.`, 'success');
+    } else {
+      showToast('Nenhuma marca em contagem travada.', 'success');
+    }
+    setCurrentView(AppView.BARCODE_FIREBASE);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleConfirmSwitchReference = async (newScannedData: Partial<InventoryCount> & { barcode: string }) => {
+    if (formData.brand || formData.barcode) {
+      try {
+        await saveInventory();
+      } catch (err) {
+        console.warn("Auto save on switch reference:", err);
+      }
+    }
+
+    const calculatedGender = newScannedData.gender || getGenderFromProductType(newScannedData.productType, '') || 'M';
+    const calculatedProductType = newScannedData.productType || getDefaultProductTypeFromGender(calculatedGender, '') || 'Tênis Adulto Masculino';
+
+    const newLock = {
+      barcode: newScannedData.barcode,
+      brand: newScannedData.brand || '',
+      model: newScannedData.model || '',
+      color: newScannedData.color || '',
+      productType: calculatedProductType,
+      arrivalMonth: newScannedData.arrivalMonth || (new Date().getMonth() + 1).toString().padStart(2, '0'),
+      arrivalYear: newScannedData.arrivalYear || new Date().getFullYear().toString(),
+      gridType: newScannedData.gridType || 'NUMERIC',
+      sizes: newScannedData.sizes || {},
+      total: newScannedData.total || 0,
+      gender: calculatedGender
+    };
+
+    setActiveLockedReference(newLock);
+    setFormData(newLock);
+    setEditingId(null);
+    setMismatchModalData(null);
+    setCurrentView(AppView.IDENTIFY);
+    showToast(`Referência finalizada! Iniciada contagem de ${newLock.brand || 'Nova Marca'}`, 'success');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleSelectBarcodeForCounting = (itemData: Partial<InventoryCount> & { barcode: string }) => {
+    // If a reference is currently locked
+    if (activeLockedReference) {
+      const isSameBarcode = itemData.barcode === activeLockedReference.barcode;
+      const isSameBrandModel = (
+        itemData.brand &&
+        activeLockedReference.brand &&
+        itemData.brand.toLowerCase() === activeLockedReference.brand.toLowerCase() &&
+        (!itemData.model || !activeLockedReference.model || itemData.model.toLowerCase() === activeLockedReference.model.toLowerCase())
+      );
+
+      if (isSameBarcode || isSameBrandModel) {
+        // Same active brand/reference! Continue on current form
+        setFormData(prev => ({
+          ...prev,
+          ...itemData,
+          barcode: itemData.barcode || prev.barcode,
+          gender: itemData.gender || prev.gender || getGenderFromProductType(itemData.productType) || 'M',
+          productType: itemData.productType || prev.productType || getDefaultProductTypeFromGender(itemData.gender) || 'Calçado'
+        }));
+        showToast(`Continuando na contagem de ${activeLockedReference.brand || 'Referência Ativa'}`, 'success');
+        setCurrentView(AppView.IDENTIFY);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        return;
+      } else {
+        // Different brand/reference scanned while reference is locked! Open modal prompt
+        setMismatchModalData({
+          newScannedData: itemData
+        });
+        return;
+      }
+    }
+
+    // No lock active: Lock onto this new scanned reference
+    const calculatedGender = itemData.gender || getGenderFromProductType(itemData.productType, '') || 'M';
+    const calculatedProductType = itemData.productType || getDefaultProductTypeFromGender(calculatedGender, '') || 'Tênis Adulto Masculino';
+
+    const newLock = {
+      barcode: itemData.barcode,
+      brand: itemData.brand || '',
+      model: itemData.model || '',
+      color: itemData.color || '',
+      productType: calculatedProductType,
+      arrivalMonth: itemData.arrivalMonth || (new Date().getMonth() + 1).toString().padStart(2, '0'),
+      arrivalYear: itemData.arrivalYear || new Date().getFullYear().toString(),
+      gridType: itemData.gridType || 'NUMERIC',
+      sizes: itemData.sizes || {},
+      total: itemData.total || 0,
+      gender: calculatedGender
+    };
+
+    setActiveLockedReference(newLock);
+    setFormData(newLock);
+    setEditingId(null);
+    setCurrentView(AppView.IDENTIFY);
+    showToast(`🔒 Contagem da marca/referência ${newLock.brand || 'Nova Marca'} iniciada!`, 'success');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  // Preload barcode memory cache for instant <1ms lookup
+  useEffect(() => {
+    preloadBarcodeCache();
+  }, []);
 
   // Auth effect
   useEffect(() => {
@@ -364,36 +592,61 @@ const App: React.FC = () => {
 
   // Handlers
   const handleStartNew = () => {
+    const recent = counts[0];
+    const brand = lastShoeInfo.brand || recent?.brand || '';
+    const gender = lastShoeInfo.gender || recent?.gender || 'M';
+    const model = lastShoeInfo.model || recent?.model || '';
+    const color = lastShoeInfo.color || recent?.color || '';
+    const productType = lastShoeInfo.productType || recent?.productType || 'Tênis Adulto Masculino';
+    const arrivalMonth = lastShoeInfo.arrivalMonth || recent?.arrivalMonth || (new Date().getMonth() + 1).toString().padStart(2, '0');
+    const arrivalYear = lastShoeInfo.arrivalYear || recent?.arrivalYear || new Date().getFullYear().toString();
+    const gridType = lastShoeInfo.gridType || recent?.gridType || 'LETTER';
+
     setFormData({
-      productType: '',
-      model: '',
-      brand: '',
-      color: '',
-      arrivalMonth: (new Date().getMonth() + 1).toString().padStart(2, '0'),
-      arrivalYear: new Date().getFullYear().toString(),
-      gridType: 'LETTER',
+      barcode: '',
+      brand,
+      productType: syncProductTypeWithGender(productType, gender),
+      model,
+      color,
+      arrivalMonth,
+      arrivalYear,
+      gridType,
       sizes: {},
       total: 0,
-      gender: 'M'
+      gender
     });
     setEditingId(null);
     setAuthError(null);
     setCurrentView(AppView.IDENTIFY);
   };
 
-  const handleStartWithSameBrand = (brand: string) => {
-    setFormData(prev => ({
-      productType: prev.productType || '',
-      model: '',
-      brand: brand,
-      color: '',
-      arrivalMonth: prev.arrivalMonth || (new Date().getMonth() + 1).toString().padStart(2, '0'),
-      arrivalYear: prev.arrivalYear || new Date().getFullYear().toString(),
-      gridType: prev.gridType || 'LETTER',
+  const handleStartWithSameBrand = (brandName: string) => {
+    const brandCounts = counts.filter(
+      c => (c.brand || '').toLowerCase().trim() === brandName.toLowerCase().trim()
+    );
+    const lastBrandCount = brandCounts[0];
+
+    const productType = lastBrandCount?.productType || lastShoeInfo.productType || 'Tênis Adulto Masculino';
+    const gender = lastBrandCount?.gender || lastShoeInfo.gender || getGenderFromProductType(productType) || 'M';
+    const model = lastBrandCount?.model || lastShoeInfo.model || '';
+    const color = lastBrandCount?.color || lastShoeInfo.color || '';
+    const arrivalMonth = lastBrandCount?.arrivalMonth || lastShoeInfo.arrivalMonth || (new Date().getMonth() + 1).toString().padStart(2, '0');
+    const arrivalYear = lastBrandCount?.arrivalYear || lastShoeInfo.arrivalYear || new Date().getFullYear().toString();
+    const gridType = lastBrandCount?.gridType || lastShoeInfo.gridType || 'LETTER';
+
+    setFormData({
+      barcode: '',
+      brand: brandName,
+      productType: syncProductTypeWithGender(productType, gender),
+      model,
+      color,
+      arrivalMonth,
+      arrivalYear,
+      gridType,
       sizes: {},
       total: 0,
-      gender: 'M'
-    }));
+      gender
+    });
     setEditingId(null);
     setAuthError(null);
     setCurrentView(AppView.IDENTIFY);
@@ -546,6 +799,8 @@ const App: React.FC = () => {
   };
 
   const saveInventory = async (): Promise<InventoryCount | null> => {
+    if (isSaving) return null;
+
     // Sanitize data
     const productType = (formData.productType || 'Calçado').trim();
     const model = (formData.model || '').trim();
@@ -558,17 +813,31 @@ const App: React.FC = () => {
 
     setIsSaving(true);
     try {
-      // Use Firestore to generate ID if we don't have one
+      // Check for duplicate item created in last 15s to avoid duplicate cards from rapid clicks
+      const duplicateRecent = !editingId && counts.find(c => 
+        c.brand?.toLowerCase().trim() === brand.toLowerCase() &&
+        c.model?.toLowerCase().trim() === model.toLowerCase() &&
+        (c.color || '').toLowerCase().trim() === (formData.color || '').toLowerCase().trim() &&
+        c.arrivalMonth === (formData.arrivalMonth || '') &&
+        c.arrivalYear === (formData.arrivalYear || '') &&
+        Math.abs(Date.now() - (c.createdAt || 0)) < 15000
+      );
+
       const inventoryRef = collection(db, 'inventory');
-      const itemDoc = editingId ? doc(db, 'inventory', editingId) : doc(inventoryRef);
+      const itemDoc = editingId 
+        ? doc(db, 'inventory', editingId) 
+        : (duplicateRecent ? doc(db, 'inventory', duplicateRecent.id) : doc(inventoryRef));
       
       const createdAt = editingId 
         ? counts.find(c => c.id === editingId)?.createdAt || Date.now() 
-        : Date.now();
+        : (duplicateRecent ? duplicateRecent.createdAt : Date.now());
+
+      const syncGender = formData.gender || getGenderFromProductType(formData.productType) || 'M';
+      const syncProductType = syncProductTypeWithGender(formData.productType, syncGender);
 
       const finalCount: InventoryCount = {
         id: itemDoc.id,
-        productType,
+        productType: syncProductType,
         model,
         brand: (formData.brand || '').trim(),
         color: (formData.color || '').trim(),
@@ -579,10 +848,64 @@ const App: React.FC = () => {
         total: formData.total || 0,
         createdAt,
         userId: currentUserId,
-        gender: formData.gender || ''
+        gender: syncGender
       };
 
       await setDoc(itemDoc, finalCount);
+
+      // Record stock movement for complete traceability
+      const prevQty = editingId ? (counts.find(c => c.id === editingId)?.total || 0) : 0;
+      recordStockMovement({
+        userId: currentUserId,
+        userName: 'Operador',
+        brand: finalCount.brand,
+        model: finalCount.model,
+        color: finalCount.color,
+        barcode: formData.barcode || 'S/C',
+        previousQty: prevQty,
+        movedQty: finalCount.total - prevQty,
+        finalQty: finalCount.total,
+        type: editingId ? 'AJUSTE' : 'ENTRADA',
+        reason: editingId ? 'Ajuste de Contagem Manual' : 'Entrada / Contagem de Estoque'
+      }).catch(err => console.warn("Could not log stock movement:", err));
+
+      // If a barcode was provided in formData, sync reference to Firebase barcodes DB
+      if (formData.barcode && formData.barcode.trim()) {
+        try {
+          await saveBarcodeReference({
+            barcode: formData.barcode.trim(),
+            brand: (formData.brand || '').trim(),
+            model: (formData.model || '').trim(),
+            productType: syncProductType,
+            color: (formData.color || '').trim(),
+            arrivalMonth: formData.arrivalMonth || '',
+            arrivalYear: formData.arrivalYear || '',
+            gridType: (formData.gridType as SizeGridType) || 'NUMERIC',
+            sizes: (formData.sizes || {}) as Record<string, number>,
+            total: formData.total || 0,
+            gender: syncGender,
+            userId: currentUserId
+          });
+        } catch (bErr) {
+          console.warn("Could not sync barcode reference:", bErr);
+        }
+      }
+
+      const newShoeInfo = {
+        brand: finalCount.brand,
+        model: finalCount.model,
+        color: finalCount.color,
+        gender: finalCount.gender,
+        productType: finalCount.productType,
+        arrivalMonth: finalCount.arrivalMonth,
+        arrivalYear: finalCount.arrivalYear,
+        gridType: finalCount.gridType
+      };
+      setLastShoeInfo(newShoeInfo);
+      try {
+        localStorage.setItem('ideal_last_shoe_info', JSON.stringify(newShoeInfo));
+      } catch (e) {}
+
       showToast(editingId ? 'Registro atualizado' : 'Registro salvo com sucesso');
       setIsSaving(false);
       return finalCount;
@@ -693,25 +1016,31 @@ const App: React.FC = () => {
     const dateStr = now.toLocaleDateString('pt-BR');
     const timeStr = now.toLocaleTimeString('pt-BR');
 
+    const totalItems = filteredCounts.reduce((sum, item) => sum + item.total, 0);
+    const brandAnalysisData = computeBrandSizeAnalysis(filteredCounts);
+
     // Header Design
-    // Red bar at top
+    // Red top banner
     doc.setFillColor(192, 36, 40); // brand-red
     doc.rect(0, 0, 210, 15, 'F');
     
-    doc.setFontSize(24);
+    // Main Title in bold red
+    doc.setFontSize(20);
     doc.setTextColor(192, 36, 40); // brand-red
     doc.setFont(undefined, 'bold');
-    doc.text('IDEAL TECIDOS - CONTROLE DE ESTOQUE', 14, 30);
+    doc.text('IDEAL TECIDOS - CONTROLE DE ESTOQUE', 14, 29);
     
+    // Subtitle in navy blue
     doc.setFontSize(10);
-    doc.setTextColor(29, 43, 91); // brand-blue
+    doc.setTextColor(29, 43, 91); // brand-blue / navy
     doc.setFont(undefined, 'bold');
-    doc.text('CALÇADOS E CONFECÇÕES', 14, 36);
+    doc.text('CALÇADOS E CONFECÇÕES', 14, 35);
     
+    // Metadata text
     doc.setFontSize(9);
     doc.setTextColor(100, 100, 100);
     doc.setFont(undefined, 'normal');
-    doc.text(`Relatório de Controle de Estoque`, 14, 42);
+    doc.text('Relatório de Controle de Estoque', 14, 41);
     doc.text(`Gerado em: ${dateStr} às ${timeStr}`, 14, 46);
 
     // Table data
@@ -725,68 +1054,158 @@ const App: React.FC = () => {
         new Date(item.createdAt).toLocaleDateString('pt-BR'),
         item.productType,
         item.model + (item.gender ? ` (${item.gender})` : ''),
-        item.brand || '',
-        item.color || '',
-        `${item.arrivalMonth || ''}${item.arrivalMonth && item.arrivalYear ? '/' : ''}${item.arrivalYear || ''}`,
-        sizesStr,
+        item.brand || '-',
+        item.color || '-',
+        `${item.arrivalMonth || ''}${item.arrivalMonth && item.arrivalYear ? '/' : ''}${item.arrivalYear || ''}` || '-',
+        sizesStr || '-',
         item.total.toString()
       ];
     });
 
     autoTable(doc, {
-      startY: 55,
+      startY: 52,
       head: [['Data', 'Produto', 'Modelo', 'Marca', 'Cor', 'Chegada', 'Grade', 'Total']],
       body: tableRows,
       theme: 'grid',
       headStyles: { 
-        fillColor: [29, 43, 91], // brand-blue
+        fillColor: [29, 43, 91], // brand-blue / navy
         textColor: [255, 255, 255],
         fontSize: 9,
         fontStyle: 'bold'
       },
-      alternateRowStyles: { fillColor: [245, 245, 245] },
+      alternateRowStyles: { fillColor: [248, 249, 250] },
       foot: [[
         { content: 'TOTAL GERAL ACUMULADO', colSpan: 7, styles: { halign: 'right', fontStyle: 'bold', fillColor: [29, 43, 91], textColor: [255, 255, 255] } },
-        { content: filteredCounts.reduce((sum, item) => sum + item.total, 0).toString(), styles: { halign: 'center', fontStyle: 'bold', fillColor: [29, 43, 91], textColor: [255, 255, 255] } }
+        { content: totalItems.toString(), styles: { halign: 'center', fontStyle: 'bold', fillColor: [29, 43, 91], textColor: [255, 255, 255], fontSize: 10 } }
       ]],
-      styles: { fontSize: 8, cellPadding: 3 },
+      styles: { fontSize: 8, cellPadding: 3, overflow: 'linebreak' },
       columnStyles: {
-        1: { fontStyle: 'bold' }, // Produto
-        2: { fontStyle: 'bold' }, // Modelo
-        5: { halign: 'center' }, // Chegada
-        7: { halign: 'center', fontStyle: 'bold', fontSize: 10 } // Total
+        0: { cellWidth: 20 },
+        1: { fontStyle: 'bold', cellWidth: 22 },
+        2: { fontStyle: 'bold', cellWidth: 32 },
+        3: { cellWidth: 22 },
+        4: { cellWidth: 18 },
+        5: { halign: 'center', cellWidth: 18 },
+        6: { cellWidth: 36 },
+        7: { halign: 'center', fontStyle: 'bold', fontSize: 9.5, cellWidth: 14 }
       }
     });
 
-    // Footer
+    // Brand Size Analysis section in jsPDF
+    if (brandAnalysisData.length > 0) {
+      const finalY = (doc as any).lastAutoTable?.finalY || 120;
+      let currentY = finalY + 12;
+      
+      if (currentY > 210) {
+        doc.addPage();
+        currentY = 20;
+      }
+
+      doc.setFontSize(12);
+      doc.setTextColor(29, 43, 91); // brand-blue / navy
+      doc.setFont(undefined, 'bold');
+      doc.text('CONTROLE DE GIRO DE NUMERAÇÕES POR MARCA', 14, currentY);
+      
+      currentY += 4.5;
+      doc.setFontSize(8);
+      doc.setTextColor(100, 100, 100);
+      doc.setFont(undefined, 'normal');
+      doc.text('Classificação por volume de saída: Saindo Bastante (Alta), Saindo Mais ou Menos (Média), Saindo Pouco (Baixa)', 14, currentY);
+
+      currentY += 4;
+
+      const brandTableRows = brandAnalysisData.map(b => {
+        const highStr = b.highOutputSizes.length > 0 
+          ? b.highOutputSizes.map(s => `${s.size} (${s.qty}un)`).join(', ')
+          : '-';
+        const medStr = b.mediumOutputSizes.length > 0 
+          ? b.mediumOutputSizes.map(s => `${s.size} (${s.qty}un)`).join(', ')
+          : '-';
+        const lowStr = b.lowOutputSizes.length > 0 
+          ? b.lowOutputSizes.map(s => `${s.size} (${s.qty}un)`).join(', ')
+          : '-';
+
+        return [
+          b.brandName,
+          `${b.totalItems} un`,
+          highStr,
+          medStr,
+          lowStr
+        ];
+      });
+
+      autoTable(doc, {
+        startY: currentY,
+        head: [['Marca', 'Total', 'Saindo Bastante (Alta)', 'Saindo Mais ou Menos (Média)', 'Saindo Pouco (Baixa)']],
+        body: brandTableRows,
+        theme: 'grid',
+        headStyles: { 
+          fillColor: [192, 36, 40], // brand-red
+          textColor: [255, 255, 255],
+          fontSize: 8.5,
+          fontStyle: 'bold'
+        },
+        alternateRowStyles: { fillColor: [248, 249, 250] },
+        styles: { fontSize: 8, cellPadding: 3, overflow: 'linebreak' },
+        columnStyles: {
+          0: { fontStyle: 'bold', cellWidth: 28 },
+          1: { halign: 'center', fontStyle: 'bold', cellWidth: 18 },
+          2: { cellWidth: 45, textColor: [16, 122, 87] },   // emerald dark text
+          3: { cellWidth: 45, textColor: [180, 83, 9] },   // amber dark text
+          4: { cellWidth: 46, textColor: [190, 18, 60] }   // rose dark text
+        }
+      });
+    }
+
+    // Page Number Footers
     const pageCount = (doc as any).internal.getNumberOfPages();
     for (let i = 1; i <= pageCount; i++) {
       doc.setPage(i);
       doc.setFontSize(8);
       doc.setTextColor(150, 150, 150);
       doc.text(
-        `Página ${i} de ${pageCount} - A Ideal Tecidos | Calçados e Confecções`,
+        `Página ${i} de ${pageCount} — A Ideal Tecidos | Calçados e Confecções`,
         doc.internal.pageSize.getWidth() / 2,
         doc.internal.pageSize.getHeight() - 10,
         { align: 'center' }
       );
     }
 
-    // Save the PDF
-    const fileName = `Relatorio_Estoque_${dateStr.replace(/\//g, '-')}_${timeStr.replace(/:/g, '-')}.pdf`;
-    doc.save(fileName);
+    doc.save(`Relatorio_Estoque_IdealTecidos_${dateStr.replace(/\//g, '-')}.pdf`);
   };
 
   // Filtered counts
   const filteredCounts = useMemo(() => {
-    if (!searchTerm) return counts;
-    const low = searchTerm.toLowerCase();
-    return counts.filter(c => 
-      c.productType.toLowerCase().includes(low) || 
-      c.model.toLowerCase().includes(low) || 
-      c.brand?.toLowerCase().includes(low)
-    );
+    let list = counts;
+    if (searchTerm) {
+      const low = searchTerm.toLowerCase();
+      list = counts.filter(c => 
+        c.productType.toLowerCase().includes(low) || 
+        c.model.toLowerCase().includes(low) || 
+        c.brand?.toLowerCase().includes(low)
+      );
+    }
+
+    // Deduplicate identical items to prevent repeating duplicate cards in the list
+    const uniqueList: InventoryCount[] = [];
+    const seenKeys = new Set<string>();
+
+    for (const item of list) {
+      const sizesStr = JSON.stringify(item.sizes || {});
+      const key = `${(item.brand || '').toLowerCase().trim()}_${(item.model || '').toLowerCase().trim()}_${(item.color || '').toLowerCase().trim()}_${item.arrivalMonth}_${item.arrivalYear}_${item.total}_${sizesStr}`;
+      if (!seenKeys.has(key)) {
+        seenKeys.add(key);
+        uniqueList.push(item);
+      }
+    }
+
+    return uniqueList;
   }, [counts, searchTerm]);
+
+  // Brand size turnover analysis
+  const brandAnalysis = useMemo(() => {
+    return computeBrandSizeAnalysis(filteredCounts);
+  }, [filteredCounts]);
 
   if (authLoading) {
     return (
@@ -881,40 +1300,96 @@ const App: React.FC = () => {
     );
   }
 
+  if (currentView === AppView.INVENTORY_MODE) {
+    return (
+      <React.Suspense fallback={<div className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-8 font-black uppercase tracking-wider">Carregando Modo Inventário...</div>}>
+        <InventoryModeModule
+          currentUserId={currentUserId}
+          onExit={() => setCurrentView(AppView.HOME)}
+          showToast={showToast}
+        />
+      </React.Suspense>
+    );
+  }
+
   return (
-    <div className="min-h-screen flex flex-col max-w-lg mx-auto bg-brand-slate shadow-2xl relative overflow-x-hidden font-sans">
+    <div className="min-h-screen flex flex-col max-w-lg sm:max-w-xl md:max-w-4xl lg:max-w-6xl xl:max-w-7xl mx-auto w-full bg-brand-slate shadow-2xl relative overflow-x-hidden font-sans">
       {/* HEADER (No Print) */}
-      <header className="no-print bg-brand-dark text-white p-6 sticky top-0 z-50 flex items-center justify-between shadow-sm">
-        <div className="flex items-center gap-3">
-          <div className="w-12 h-12 bg-white rounded-full flex items-center justify-center shadow-lg border-2 border-white overflow-hidden relative">
-            <div className="flex flex-col items-center scale-[0.35] leading-[0.8] relative z-10 -mt-1">
-              <span className="text-[#C02428] font-serif font-bold text-lg italic">A Ideal</span>
-              <span className="text-[#C02428] font-serif font-bold text-xl italic">Tecidos</span>
-            </div>
-            <div className="absolute bottom-0 left-0 right-0 h-[45%] bg-[#1D2B5B] rounded-t-[100%] scale-x-125 translate-y-1"></div>
-            <div className="absolute bottom-[5%] left-0 right-0 h-[25%] bg-[#C02428] rounded-t-[100%] scale-x-150 rotate-3 translate-y-1 opacity-90"></div>
+      <header className="no-print bg-slate-950/95 backdrop-blur-md border-b border-slate-800 text-white py-3 px-4 sm:px-6 sticky top-0 z-50 flex items-center justify-between shadow-xl">
+        <div 
+          onClick={() => setCurrentView(AppView.HOME)}
+          className="flex items-center gap-2.5 sm:gap-3 cursor-pointer group shrink-0"
+          title="Ir para a Página Inicial"
+        >
+          <div className="w-12 h-12 sm:w-14 sm:h-14 bg-white rounded-full flex items-center justify-center shadow-lg border-2 border-white/20 overflow-hidden shrink-0 group-hover:scale-105 transition-transform p-0.5">
+            <svg viewBox="0 0 100 100" className="w-full h-full">
+              <circle cx="50" cy="50" r="50" fill="#ffffff" />
+              <path d="M -10 66 Q 50 54 110 66 L 110 110 L -10 110 Z" fill="#1D2B5B" />
+              <path d="M -10 78 Q 50 67 110 78 L 110 110 L -10 110 Z" fill="#C02428" />
+              <text x="50" y="27" textAnchor="middle" fill="#C02428" fontFamily="Georgia, 'Times New Roman', serif" fontWeight="bold" fontSize="16" fontStyle="italic">A Ideal</text>
+              <text x="50" y="45" textAnchor="middle" fill="#C02428" fontFamily="Georgia, 'Times New Roman', serif" fontWeight="bold" fontSize="20" fontStyle="italic">Tecidos</text>
+              <text x="50" y="57" textAnchor="middle" fill="#1D2B5B" fontFamily="Arial, Helvetica, sans-serif" fontWeight="900" fontSize="6.2" letterSpacing="0.2">CALÇADOS E CONFECÇÕES</text>
+            </svg>
           </div>
-          <div>
-            <h1 className="font-display font-black text-2xl uppercase tracking-tighter leading-none text-white">Ideal Tecidos</h1>
-            <p className="text-[10px] uppercase font-black text-brand-red tracking-[0.2em] mt-1 space-x-1">
-              <span>C</span><span>O</span><span>N</span><span>T</span><span>R</span><span>O</span><span>L</span><span>E</span><span> </span><span>D</span><span>E</span><span> </span><span>E</span><span>S</span><span>T</span><span>O</span><span>Q</span><span>U</span><span>E</span>
+          <div className="flex flex-col justify-center">
+            <div className="flex items-center gap-2">
+              <h1 className="font-display font-black text-base sm:text-xl uppercase tracking-tight leading-none text-white group-hover:text-emerald-400 transition-colors">
+                A Ideal Tecidos
+              </h1>
+              <span className="hidden sm:inline-block px-2 py-0.5 rounded-full bg-brand-red/20 text-red-400 border border-brand-red/30 text-[9px] font-black uppercase tracking-wider">
+                Estoque
+              </span>
+            </div>
+            <p className="text-[10px] sm:text-xs font-black uppercase tracking-wider text-blue-300 mt-1 leading-none">
+              Calçados e Confecções
+            </p>
+            <p className="text-[9px] sm:text-[10.5px] font-bold text-amber-300 italic mt-0.5 leading-none">
+              "A Loja da Sua Família"
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-3">
+
+        <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+          <button 
+            onClick={() => setCurrentView(AppView.REPORTS)}
+            className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all active:scale-95 border ${
+              currentView === AppView.REPORTS
+                ? 'bg-blue-600 text-white border-blue-400 shadow-md shadow-blue-950/50'
+                : 'bg-blue-950/60 hover:bg-blue-900/60 text-blue-300 border-blue-500/30'
+            }`}
+            title="Abrir Módulo de Relatórios"
+          >
+            <FileText size={15} />
+            <span className="hidden sm:inline">Relatórios</span>
+          </button>
+          <button 
+            onClick={() => setCurrentView(AppView.DASHBOARD)}
+            className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all active:scale-95 border ${
+              currentView === AppView.DASHBOARD
+                ? 'bg-emerald-600 text-white border-emerald-400 shadow-md shadow-emerald-950/50'
+                : 'bg-emerald-950/60 hover:bg-emerald-900/60 text-emerald-300 border-emerald-500/30'
+            }`}
+            title="Abrir Dashboard"
+          >
+            <BarChart3 size={15} />
+            <span className="hidden sm:inline">Dashboard</span>
+          </button>
+          <OfflineSyncBadge userId={currentUserId} showToast={showToast} />
           {currentView !== AppView.HOME && (
             <button 
               onClick={() => setCurrentView(AppView.HOME)}
-              className="w-10 h-10 flex items-center justify-center bg-white/5 hover:bg-white/10 rounded-xl transition-all active:scale-90"
+              className="flex items-center gap-1 px-2.5 sm:px-3 py-1.5 bg-slate-800/80 hover:bg-slate-700 text-slate-200 border border-slate-700/80 rounded-xl text-xs font-black uppercase tracking-wider transition-all active:scale-95"
+              title="Voltar ao Início"
             >
-              <XCircle size={20} className="text-white/60" />
+              <Home size={15} />
+              <span className="hidden md:inline">Início</span>
             </button>
           )}
         </div>
       </header>
 
       {/* VIEWS */}
-      <main className="flex-1 p-6 pb-32 no-print space-y-8">
+      <main className="flex-1 p-3.5 sm:p-5 md:p-6 pb-28 sm:pb-32 no-print space-y-5 sm:space-y-8">
         <AnimatePresence mode="wait">
           {currentView === AppView.HOME && (
             <motion.div 
@@ -922,35 +1397,35 @@ const App: React.FC = () => {
               initial={{ opacity: 0, y: 15 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -15 }}
-              className="space-y-8"
+              className="space-y-5 sm:space-y-8"
             >
               {/* Summary Dashboard */}
-              <div className="grid grid-cols-2 gap-5">
+              <div className="grid grid-cols-2 gap-3 sm:gap-5">
                 <motion.div 
                   whileHover={{ y: -4 }}
-                  className="bg-white p-6 rounded-[2.5rem] shadow-modern border border-gray-100 flex flex-col justify-between overflow-hidden relative group"
+                  className="bg-white p-4 sm:p-6 rounded-2xl sm:rounded-[2.5rem] shadow-modern border border-gray-100 flex flex-col justify-between overflow-hidden relative group"
                 >
                   <div className="absolute top-0 right-0 w-32 h-32 bg-brand-slate rounded-full -mr-16 -mt-16 group-hover:scale-150 transition-transform duration-1000 ease-out"></div>
-                  <div className="mb-6 bg-brand-blue/5 w-12 h-12 rounded-2xl flex items-center justify-center text-brand-blue relative z-10 border border-brand-blue/5">
-                    <LayoutGrid size={22} strokeWidth={2.5} />
+                  <div className="mb-4 sm:mb-6 bg-brand-blue/5 w-10 h-10 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl flex items-center justify-center text-brand-blue relative z-10 border border-brand-blue/5">
+                    <LayoutGrid size={20} strokeWidth={2.5} className="sm:w-[22px] sm:h-[22px]" />
                   </div>
                   <div className="relative z-10">
-                    <span className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block mb-1">Registros</span>
-                    <span className="text-4xl font-display font-black text-brand-dark tracking-tighter">{counts.length}</span>
+                    <span className="text-[9px] sm:text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Registros</span>
+                    <span className="text-2xl sm:text-4xl font-display font-black text-brand-dark tracking-tighter">{counts.length}</span>
                   </div>
                 </motion.div>
                 
                 <motion.div 
                   whileHover={{ y: -4 }}
-                  className="bg-brand-blue p-6 rounded-[2.5rem] shadow-modern-lg flex flex-col justify-between text-white overflow-hidden relative group"
+                  className="bg-brand-blue p-4 sm:p-6 rounded-2xl sm:rounded-[2.5rem] shadow-modern-lg flex flex-col justify-between text-white overflow-hidden relative group"
                 >
                   <div className="absolute top-0 right-0 w-32 h-32 bg-white/5 rounded-full -mr-16 -mt-16 group-hover:scale-150 transition-transform duration-1000 ease-out"></div>
-                  <div className="mb-6 bg-white/10 w-12 h-12 rounded-2xl flex items-center justify-center text-white relative z-10 backdrop-blur-sm border border-white/10">
-                    <Package size={22} strokeWidth={2.5} />
+                  <div className="mb-4 sm:mb-6 bg-white/10 w-10 h-10 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl flex items-center justify-center text-white relative z-10 backdrop-blur-sm border border-white/10">
+                    <Package size={20} strokeWidth={2.5} className="sm:w-[22px] sm:h-[22px]" />
                   </div>
                   <div className="relative z-10">
-                    <span className="text-[10px] font-black text-white/40 uppercase tracking-[0.2em] block mb-1">Peças Totais</span>
-                    <span className="text-4xl font-display font-black tracking-tighter">{counts.reduce((sum, c) => sum + c.total, 0)}</span>
+                    <span className="text-[9px] sm:text-[10px] font-black text-white/40 uppercase tracking-widest block mb-1">Peças Totais</span>
+                    <span className="text-2xl sm:text-4xl font-display font-black tracking-tighter">{counts.reduce((sum, c) => sum + c.total, 0)}</span>
                   </div>
                 </motion.div>
               </div>
@@ -959,63 +1434,180 @@ const App: React.FC = () => {
               <motion.div 
                 whileHover={{ y: -2 }}
                 onClick={() => setCurrentView(AppView.INVENTORIES)}
-                className="bg-gradient-to-br from-brand-dark via-[#1a254c] to-brand-blue text-white p-6 rounded-[2.5rem] shadow-modern-lg cursor-pointer space-y-4 border border-white/10 group relative overflow-hidden"
+                className="bg-gradient-to-br from-brand-dark via-[#1a254c] to-brand-blue text-white p-4 sm:p-6 rounded-2xl sm:rounded-[2.5rem] shadow-modern-lg cursor-pointer space-y-3 sm:space-y-4 border border-white/10 group relative overflow-hidden"
               >
-                <div className="flex items-center justify-between relative z-10">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-2xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center">
-                      <CheckCircle2 size={22} strokeWidth={2.5} />
+                <div className="flex items-center justify-between relative z-10 gap-2">
+                  <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+                    <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl sm:rounded-2xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center shrink-0">
+                      <CheckCircle2 size={20} strokeWidth={2.5} />
                     </div>
-                    <div>
-                      <h3 className="font-display font-black text-sm uppercase tracking-wider text-white">Inventário de Marcas em Tempo Real</h3>
-                      <p className="text-[10px] text-emerald-400 font-bold uppercase tracking-widest flex items-center gap-1 mt-0.5">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                    <div className="min-w-0">
+                      <h3 className="font-display font-black text-xs sm:text-sm uppercase tracking-wider text-white truncate">Inventário de Marcas em Tempo Real</h3>
+                      <p className="text-[9px] sm:text-[10px] text-emerald-400 font-bold uppercase tracking-wider flex items-center gap-1 mt-0.5 truncate">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0"></span>
                         {completedCount} de {allBrandsList.length} marcas concluídas
                       </p>
                     </div>
                   </div>
-                  <ChevronLeft size={20} className="rotate-180 text-white/40 group-hover:text-white transition-colors" />
+                  <ChevronLeft size={18} className="rotate-180 text-white/40 group-hover:text-white transition-colors shrink-0" />
                 </div>
 
                 <div className="space-y-1.5 relative z-10">
-                  <div className="w-full bg-white/10 h-3 rounded-full overflow-hidden p-0.5 border border-white/10">
+                  <div className="w-full bg-white/10 h-2.5 sm:h-3 rounded-full overflow-hidden p-0.5 border border-white/10">
                     <div 
                       className="bg-gradient-to-r from-emerald-400 to-teal-300 h-full rounded-full transition-all duration-500"
                       style={{ width: `${Math.min(100, Math.max(3, (completedCount / (allBrandsList.length || 1)) * 100))}%` }}
                     ></div>
                   </div>
-                  <div className="flex justify-between items-center text-[9px] font-black uppercase text-white/60 tracking-wider">
+                  <div className="flex justify-between items-center text-[8px] sm:text-[9px] font-black uppercase text-white/60 tracking-wider">
                     <span>{inProgressCount} marcas em contagem</span>
                     <span className="text-emerald-300 font-black">Ver Inventário Completo →</span>
                   </div>
                 </div>
               </motion.div>
 
-              <div className="flex flex-col gap-5">
+              <div className="flex flex-col gap-3.5 sm:gap-5">
+                {/* RELATÓRIOS AVANÇADOS ACTION CARD */}
+                <motion.button 
+                  whileTap={{ scale: 0.98 }}
+                  onClick={() => setCurrentView(AppView.REPORTS)}
+                  className="relative overflow-hidden bg-gradient-to-r from-blue-900 via-slate-900 to-indigo-950 text-white p-4 sm:p-6 rounded-2xl sm:rounded-[2rem] shadow-2xl shadow-blue-950/40 flex items-center justify-between group active:brightness-95 transition-all text-left border-2 border-blue-500/30"
+                >
+                  <div className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/10 to-white/0 -translate-x-full group-hover:translate-x-full transition-transform duration-1000"></div>
+                  <div className="flex items-center gap-3 sm:gap-4 min-w-0 pr-2">
+                    <div className="bg-blue-500/20 text-blue-400 border border-blue-500/40 w-10 h-10 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform duration-300 shadow-inner">
+                      <FileText size={22} strokeWidth={2.5} className="sm:w-7 sm:h-7" />
+                    </div>
+                    <div className="font-display min-w-0">
+                      <span className="text-base sm:text-xl font-black tracking-tight uppercase leading-none mb-1 flex items-center gap-1.5 flex-wrap">
+                        RELATÓRIOS
+                        <span className="bg-blue-400 text-slate-950 text-[8px] sm:text-[9px] px-1.5 sm:px-2 py-0.5 rounded-full font-extrabold uppercase whitespace-nowrap">PDF / Excel / CSV</span>
+                      </span>
+                      <span className="block text-[9px] sm:text-[10px] font-bold text-slate-300 uppercase tracking-wide leading-tight">Filtros por Marca, Modelo, Cor, Zerados, Divergências</span>
+                    </div>
+                  </div>
+                  <div className="px-3 sm:px-3.5 py-1.5 bg-blue-500 text-slate-950 font-black uppercase text-[9px] sm:text-[10px] tracking-wider rounded-xl shadow-md group-hover:bg-blue-400 transition-colors shrink-0">
+                    Gerar
+                  </div>
+                </motion.button>
+
+                {/* DASHBOARD PROFISSIONAL ACTION CARD */}
+                <motion.button 
+                  whileTap={{ scale: 0.98 }}
+                  onClick={() => setCurrentView(AppView.DASHBOARD)}
+                  className="relative overflow-hidden bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white p-4 sm:p-6 rounded-2xl sm:rounded-[2rem] shadow-2xl shadow-indigo-950/40 flex items-center justify-between group active:brightness-95 transition-all text-left border-2 border-indigo-500/30"
+                >
+                  <div className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/10 to-white/0 -translate-x-full group-hover:translate-x-full transition-transform duration-1000"></div>
+                  <div className="flex items-center gap-3 sm:gap-4 min-w-0 pr-2">
+                    <div className="bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 w-10 h-10 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform duration-300 shadow-inner">
+                      <BarChart3 size={22} strokeWidth={2.5} className="sm:w-7 sm:h-7" />
+                    </div>
+                    <div className="font-display min-w-0">
+                      <span className="text-base sm:text-xl font-black tracking-tight uppercase leading-none mb-1 flex items-center gap-1.5 flex-wrap">
+                        DASHBOARD
+                        <span className="bg-emerald-400 text-slate-950 text-[8px] sm:text-[9px] px-1.5 sm:px-2 py-0.5 rounded-full font-extrabold uppercase whitespace-nowrap">Profissional</span>
+                      </span>
+                      <span className="block text-[9px] sm:text-[10px] font-bold text-slate-300 uppercase tracking-wide leading-tight">Métricas, Gráficos, Top Marcas e Modelos</span>
+                    </div>
+                  </div>
+                  <div className="px-3 sm:px-3.5 py-1.5 bg-emerald-500 text-slate-950 font-black uppercase text-[9px] sm:text-[10px] tracking-wider rounded-xl shadow-md group-hover:bg-emerald-400 transition-colors shrink-0">
+                    Abrir
+                  </div>
+                </motion.button>
+
+                {/* MODO INVENTÁRIO EXCLUSIVO ACTION CARD */}
+                <motion.button 
+                  whileTap={{ scale: 0.98 }}
+                  onClick={() => setCurrentView(AppView.INVENTORY_MODE)}
+                  className="relative overflow-hidden bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 text-white p-4 sm:p-6 rounded-2xl sm:rounded-[2rem] shadow-2xl shadow-emerald-600/30 flex items-center justify-between group active:brightness-95 transition-all text-left border-2 border-emerald-400/30"
+                >
+                  <div className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/20 to-white/0 -translate-x-full group-hover:translate-x-full transition-transform duration-1000"></div>
+                  <div className="flex items-center gap-3 sm:gap-4 min-w-0 pr-2">
+                    <div className="bg-white/20 w-10 h-10 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform duration-300 shadow-inner">
+                      <Zap size={22} strokeWidth={2.5} className="text-amber-300 animate-pulse sm:w-7 sm:h-7" />
+                    </div>
+                    <div className="font-display min-w-0">
+                      <span className="text-base sm:text-xl font-black tracking-tight uppercase leading-none mb-1 flex items-center gap-1.5 flex-wrap">
+                        MODO INVENTÁRIO
+                        <span className="bg-amber-400 text-slate-950 text-[8px] sm:text-[9px] px-1.5 sm:px-2 py-0.5 rounded-full font-extrabold uppercase whitespace-nowrap">Rápido</span>
+                      </span>
+                      <span className="block text-[9px] sm:text-[10px] font-bold text-emerald-100 uppercase tracking-wide leading-tight">Contagem ultra-rápida em tela limpa</span>
+                    </div>
+                  </div>
+                  <div className="px-3 sm:px-3.5 py-1.5 bg-white text-emerald-700 font-black uppercase text-[9px] sm:text-[10px] tracking-wider rounded-xl shadow-md group-hover:bg-emerald-50 transition-colors shrink-0">
+                    Iniciar
+                  </div>
+                </motion.button>
+
+                {/* MOVIMENTAÇÕES DE ESTOQUE ACTION CARD */}
+                <motion.button 
+                  whileTap={{ scale: 0.98 }}
+                  onClick={() => setCurrentView(AppView.STOCK_MOVEMENTS)}
+                  className="relative overflow-hidden bg-gradient-to-r from-indigo-700 via-blue-700 to-indigo-800 text-white p-4 sm:p-6 rounded-2xl sm:rounded-[2rem] shadow-2xl shadow-indigo-600/30 flex items-center justify-between group active:brightness-95 transition-all text-left border-2 border-indigo-400/30"
+                >
+                  <div className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/10 to-white/0 -translate-x-full group-hover:translate-x-full transition-transform duration-1000"></div>
+                  <div className="flex items-center gap-3 sm:gap-4 min-w-0 pr-2">
+                    <div className="bg-white/20 w-10 h-10 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform duration-300 shadow-inner">
+                      <History size={22} strokeWidth={2.5} className="text-indigo-200 sm:w-7 sm:h-7" />
+                    </div>
+                    <div className="font-display min-w-0">
+                      <span className="text-base sm:text-xl font-black tracking-tight uppercase leading-none mb-1 flex items-center gap-1.5 flex-wrap">
+                        Movimentações
+                        <span className="bg-indigo-300 text-slate-950 text-[8px] sm:text-[9px] px-1.5 sm:px-2 py-0.5 rounded-full font-extrabold uppercase whitespace-nowrap">Estoque</span>
+                      </span>
+                      <span className="block text-[9px] sm:text-[10px] font-bold text-indigo-100 uppercase tracking-wide leading-tight">Entradas, Saídas, Ajustes e Histórico</span>
+                    </div>
+                  </div>
+                  <div className="px-3 sm:px-3.5 py-1.5 bg-white text-indigo-700 font-black uppercase text-[9px] sm:text-[10px] tracking-wider rounded-xl shadow-md group-hover:bg-indigo-50 transition-colors shrink-0">
+                    Ver
+                  </div>
+                </motion.button>
+
+                {/* LER CÓDIGO DE BARRAS ACTION CARD */}
+                <motion.button 
+                  whileTap={{ scale: 0.98 }}
+                  onClick={() => setCurrentView(AppView.BARCODE_FIREBASE)}
+                  className="relative overflow-hidden bg-gradient-to-r from-red-600 via-rose-600 to-red-700 text-white p-4 sm:p-6 rounded-2xl sm:rounded-[2rem] shadow-2xl shadow-red-600/30 flex items-center justify-between group active:brightness-95 transition-all text-left"
+                >
+                  <div className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/10 to-white/0 -translate-x-full group-hover:translate-x-full transition-transform duration-1000"></div>
+                  <div className="flex items-center gap-3 sm:gap-4 min-w-0 pr-2">
+                    <div className="bg-white/20 w-10 h-10 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform duration-300 shadow-inner">
+                      <Barcode size={22} strokeWidth={2.5} className="sm:w-7 sm:h-7" />
+                    </div>
+                    <div className="font-display min-w-0">
+                      <span className="block text-base sm:text-xl font-black tracking-tight uppercase leading-tight mb-0.5">Leitura por Código de Barras</span>
+                      <span className="block text-[9px] sm:text-[10px] font-bold text-white/90 uppercase tracking-wide leading-tight">Bipar código → Cadastrar e Contar Estoque</span>
+                    </div>
+                  </div>
+                  <div className="px-3 sm:px-3.5 py-1.5 bg-white text-red-600 font-black uppercase text-[9px] sm:text-[10px] tracking-wider rounded-xl shadow-md group-hover:bg-red-50 transition-colors shrink-0">
+                    Ler / Bipar
+                  </div>
+                </motion.button>
+
                 <motion.button 
                   whileTap={{ scale: 0.98 }}
                   onClick={handleStartNew}
-                  className="relative overflow-hidden bg-brand-red text-white py-6 px-7 rounded-[2rem] shadow-2xl shadow-brand-red/30 flex items-center justify-between group active:brightness-95 transition-all"
+                  className="relative overflow-hidden bg-brand-red text-white p-4 sm:p-6 rounded-2xl sm:rounded-[2rem] shadow-2xl shadow-brand-red/30 flex items-center justify-between group active:brightness-95 transition-all"
                 >
                   <div className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/10 to-white/0 -translate-x-full group-hover:translate-x-full transition-transform duration-1000"></div>
-                  <div className="flex items-center gap-4">
-                    <div className="bg-white/20 w-12 h-12 rounded-2xl flex items-center justify-center group-hover:rotate-90 transition-transform duration-500 shadow-inner">
-                      <Plus size={28} strokeWidth={3} />
+                  <div className="flex items-center gap-3 sm:gap-4 min-w-0 pr-2">
+                    <div className="bg-white/20 w-10 h-10 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl flex items-center justify-center shrink-0 group-hover:rotate-90 transition-transform duration-500 shadow-inner">
+                      <Plus size={22} strokeWidth={3} className="sm:w-7 sm:h-7" />
                     </div>
-                    <div className="text-left font-display">
-                      <span className="block text-xl font-black tracking-tight uppercase leading-none mb-1">Nova Contagem</span>
-                      <span className="block text-[10px] font-bold text-white/50 uppercase tracking-[0.1em]">Registrar movimentação</span>
+                    <div className="text-left font-display min-w-0">
+                      <span className="block text-base sm:text-xl font-black tracking-tight uppercase leading-tight mb-0.5">Nova Contagem Manual</span>
+                      <span className="block text-[9px] sm:text-[10px] font-bold text-white/50 uppercase tracking-wide leading-tight">Registrar sem código</span>
                     </div>
                   </div>
-                  <PlusCircle size={24} className="text-white/20 group-hover:text-white/40 transition-colors" />
+                  <PlusCircle size={22} className="text-white/20 group-hover:text-white/40 transition-colors shrink-0" />
                 </motion.button>
 
                 <div className="relative group">
-                  <Search className="absolute left-6 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-brand-accent transition-colors" size={20} />
+                  <Search className="absolute left-4 sm:left-6 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-brand-accent transition-colors" size={18} />
                   <input 
                     type="text"
                     placeholder="Filtrar por produto, marca..."
-                    className="w-full pl-16 pr-12 py-7 bg-white rounded-[2.2rem] shadow-modern border border-gray-100 focus:border-brand-accent/30 focus:ring-8 focus:ring-brand-accent/5 focus:outline-none transition-all text-base font-bold placeholder:text-gray-300"
+                    className="w-full pl-12 sm:pl-16 pr-10 sm:pr-12 py-4 sm:py-6 bg-white rounded-2xl sm:rounded-[2.2rem] shadow-modern border border-gray-100 focus:border-brand-accent/30 focus:ring-4 focus:ring-brand-accent/5 focus:outline-none transition-all text-sm sm:text-base font-bold placeholder:text-gray-300"
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                   />
@@ -1024,7 +1616,7 @@ const App: React.FC = () => {
                       initial={{ opacity: 0, scale: 0.5 }}
                       animate={{ opacity: 1, scale: 1 }}
                       onClick={() => setSearchTerm('')}
-                      className="absolute right-6 top-1/2 -translate-y-1/2 w-9 h-9 flex items-center justify-center bg-gray-50 text-gray-400 hover:text-brand-red rounded-full transition-colors active:scale-90"
+                      className="absolute right-4 sm:right-6 top-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center bg-gray-50 text-gray-400 hover:text-brand-red rounded-full transition-colors active:scale-90"
                     >
                       <XCircle size={18} fill="currentColor" className="text-white" />
                     </motion.button>
@@ -1077,16 +1669,11 @@ const App: React.FC = () => {
                         className="bg-white rounded-[2.5rem] shadow-modern-sm border border-gray-100 overflow-hidden group"
                       >
                         <div className="p-6 space-y-4">
-                          {/* Top row: Type and Actions */}
+                          {/* Top row: Actions and Date */}
                           <div className="flex justify-between items-center">
-                            <div className="flex items-center gap-2">
-                              <span className="bg-brand-dark text-white text-[10px] font-black px-3 py-1.5 rounded-lg uppercase tracking-widest">
-                                {item.productType}
-                              </span>
-                              <span className="text-gray-400 text-[10px] font-bold uppercase tracking-widest">
-                                {new Date(item.createdAt).toLocaleDateString('pt-BR')}
-                              </span>
-                            </div>
+                            <span className="text-gray-400 text-xs font-bold uppercase tracking-widest bg-brand-slate px-3 py-1 rounded-lg">
+                              {new Date(item.createdAt).toLocaleDateString('pt-BR')}
+                            </span>
                             
                             <div className="flex gap-2">
                               <button 
@@ -1122,10 +1709,10 @@ const App: React.FC = () => {
                             </div>
                           </div>
 
-                          {/* Middle row: Model and Info */}
+                          {/* Middle row: Brand (Bold) and Model / Details */}
                           <div className="space-y-1">
                             <h3 className="font-display font-black text-brand-dark text-2xl leading-tight tracking-tight uppercase flex flex-wrap items-center gap-2">
-                              <span>{item.model}</span>
+                              <span>{item.brand || item.model || 'SEM MARCA'}</span>
                               {item.gender && (
                                 <span className={`text-[10px] px-2.5 py-0.5 rounded-full font-black uppercase tracking-wider ${
                                   item.gender === 'M' ? 'bg-blue-50 text-blue-600 border border-blue-100' :
@@ -1138,8 +1725,8 @@ const App: React.FC = () => {
                               )}
                             </h3>
                             <div className="flex flex-wrap items-center gap-2 text-xs font-bold text-gray-400 uppercase tracking-wider">
-                              {item.brand && <span>{item.brand}</span>}
-                              {item.brand && item.color && <span className="w-1 h-1 bg-gray-200 rounded-full"></span>}
+                              {item.model && <span>{item.model}</span>}
+                              {item.model && item.color && <span className="w-1 h-1 bg-gray-200 rounded-full"></span>}
                               {item.color && <span>{item.color}</span>}
                               {(item.arrivalMonth || item.arrivalYear) && (
                                 <>
@@ -1191,9 +1778,151 @@ const App: React.FC = () => {
               exit={{ opacity: 0, x: -20 }}
               className="space-y-8"
             >
+              {activeLockedReference && (
+                <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-blue-900 text-white p-5 rounded-[2.5rem] shadow-xl border border-indigo-500/30 relative overflow-hidden">
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 relative z-10">
+                    <div className="flex items-center gap-3">
+                      <div className="w-11 h-11 bg-emerald-500/20 text-emerald-400 rounded-2xl flex items-center justify-center border border-emerald-500/30 shrink-0 shadow-inner">
+                        <Lock size={22} strokeWidth={2.5} />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[9px] font-black uppercase tracking-widest text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-md border border-emerald-500/20">
+                            Contagem da Marca Travada
+                          </span>
+                        </div>
+                        <h3 className="text-base font-black uppercase text-white mt-1 tracking-tight">
+                          Marca: <span className="text-emerald-300">{activeLockedReference.brand || 'Não Informada'}</span>
+                          {activeLockedReference.model && (
+                            <span className="text-white/80 font-normal text-xs lowercase ml-2">
+                              • Ref: {activeLockedReference.model}
+                            </span>
+                          )}
+                        </h3>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleFinishActiveReference}
+                      className="w-full sm:w-auto px-5 py-3 bg-emerald-500 hover:bg-emerald-600 text-white font-black text-xs uppercase tracking-wider rounded-2xl shadow-lg shadow-emerald-500/25 flex items-center justify-center gap-2 transition-all active:scale-95 shrink-0"
+                    >
+                      <CheckCircle2 size={18} />
+                      Concluir Marca/Referência
+                    </button>
+                  </div>
+                </div>
+              )}
+
               <div className="bg-white p-6 sm:p-8 rounded-[2.5rem] shadow-modern-lg space-y-6 border border-white relative overflow-hidden">
                 <div className="absolute top-0 right-0 w-32 h-32 bg-brand-slate rounded-full -mr-16 -mt-16 opacity-50 pointer-events-none"></div>
+
+                {/* Pre-fill status indicator & clear form action */}
+                {(formData.brand || formData.model || formData.color) && (
+                  <div className="flex items-center justify-between pb-3 border-b border-gray-100 relative z-10">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                      <span className="text-[10px] font-black uppercase tracking-widest text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200">
+                        ⚡ Dados do último lançamento mantidos
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFormData({
+                          barcode: '',
+                          productType: '',
+                          model: '',
+                          brand: '',
+                          color: '',
+                          arrivalMonth: (new Date().getMonth() + 1).toString().padStart(2, '0'),
+                          arrivalYear: new Date().getFullYear().toString(),
+                          gridType: 'LETTER',
+                          sizes: {},
+                          total: 0,
+                          gender: 'M'
+                        });
+                        showToast('Formulário limpo para novo modelo', 'success');
+                      }}
+                      className="text-[10px] font-black uppercase text-gray-400 hover:text-red-600 transition-colors flex items-center gap-1 active:scale-95 bg-gray-50 hover:bg-red-50 px-3 py-1.5 rounded-xl border border-gray-200 hover:border-red-200"
+                    >
+                      <RotateCcw size={12} />
+                      Limpar Campos
+                    </button>
+                  </div>
+                )}
                 
+                {/* Barcode Banner or Quick Scan on IDENTIFY screen (Photo 2) */}
+                {formData.barcode ? (
+                  <div className="bg-red-50 border-2 border-red-200 p-4 rounded-2xl flex items-center justify-between gap-3 relative z-10 shadow-sm">
+                    <div className="flex items-center gap-3">
+                      <div className="p-3 bg-red-600 text-white rounded-xl shadow-md">
+                        <Barcode size={24} />
+                      </div>
+                      <div>
+                        <span className="text-[10px] font-black uppercase tracking-widest text-red-600 block">
+                          Código de Barras Bipado
+                        </span>
+                        <span className="font-mono text-lg font-black text-brand-dark">
+                          {formData.barcode}
+                        </span>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setFormData(prev => ({ ...prev, barcode: '' }))}
+                      className="text-xs font-bold text-gray-500 hover:text-red-600 bg-white px-3 py-2 rounded-xl border border-gray-200 shadow-sm transition-all"
+                    >
+                      Remover Código
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-2 relative z-10">
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2 flex items-center justify-between">
+                      <span>Código de Barras (Opcional)</span>
+                      <span className="text-brand-blue font-bold text-[9px]">Leitura Rápida</span>
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        placeholder="Digite ou bipe o código de barras aqui..."
+                        className="w-full p-4 bg-brand-slate border border-gray-100 focus:border-brand-accent focus:bg-white rounded-2xl focus:outline-none font-mono font-bold text-base text-brand-dark pr-12 transition-all"
+                        onKeyDown={async (e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            const val = (e.target as HTMLInputElement).value.trim();
+                            if (val) {
+                              const clean = sanitizeBarcode(val);
+                              const found = await getReferenceByBarcode(clean);
+                              if (found) {
+                                setFormData(prev => ({
+                                  ...prev,
+                                  barcode: found.barcode,
+                                  brand: found.brand || prev.brand,
+                                  model: found.model || prev.model,
+                                  color: found.color || prev.color,
+                                  gender: found.gender || prev.gender,
+                                  arrivalMonth: found.arrivalMonth || prev.arrivalMonth,
+                                  arrivalYear: found.arrivalYear || prev.arrivalYear,
+                                  gridType: found.gridType || prev.gridType,
+                                  sizes: found.sizes ? { ...found.sizes } : prev.sizes
+                                }));
+                                showToast(`Dados encontrados para o código: ${found.barcode}`, 'success');
+                              } else {
+                                setFormData(prev => ({ ...prev, barcode: clean }));
+                                showToast(`Código ${clean} pronto para cadastro`, 'success');
+                              }
+                            }
+                          }
+                        }}
+                      />
+                      <div className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400">
+                        <Barcode size={20} />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* Brand Selection with Dropdown */}
                 <div className="space-y-2 relative z-10">
                   <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2">Marca</label>
@@ -1257,9 +1986,11 @@ const App: React.FC = () => {
                           type="button"
                           onClick={() => {
                             const newGender = formData.gender === opt.id ? '' : opt.id;
+                            const newProductType = syncProductTypeWithGender(formData.productType, newGender);
                             setFormData(prev => ({ 
                               ...prev, 
-                              gender: newGender
+                              gender: newGender,
+                              productType: newProductType
                             }));
                           }}
                           className={`p-3 rounded-xl transition-all flex items-center gap-2.5 text-left border ${
@@ -1373,6 +2104,42 @@ const App: React.FC = () => {
               exit={{ opacity: 0, x: -20 }}
               className="space-y-8"
             >
+              {activeLockedReference && (
+                <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-blue-900 text-white p-5 rounded-[2.5rem] shadow-xl border border-indigo-500/30 relative overflow-hidden">
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 relative z-10">
+                    <div className="flex items-center gap-3">
+                      <div className="w-11 h-11 bg-emerald-500/20 text-emerald-400 rounded-2xl flex items-center justify-center border border-emerald-500/30 shrink-0 shadow-inner">
+                        <Lock size={22} strokeWidth={2.5} />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[9px] font-black uppercase tracking-widest text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-md border border-emerald-500/20">
+                            Contagem da Marca Travada
+                          </span>
+                        </div>
+                        <h3 className="text-base font-black uppercase text-white mt-1 tracking-tight">
+                          Marca: <span className="text-emerald-300">{activeLockedReference.brand || 'Não Informada'}</span>
+                          {activeLockedReference.model && (
+                            <span className="text-white/80 font-normal text-xs lowercase ml-2">
+                              • Ref: {activeLockedReference.model}
+                            </span>
+                          )}
+                        </h3>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleFinishActiveReference}
+                      className="w-full sm:w-auto px-5 py-3 bg-emerald-500 hover:bg-emerald-600 text-white font-black text-xs uppercase tracking-wider rounded-2xl shadow-lg shadow-emerald-500/25 flex items-center justify-center gap-2 transition-all active:scale-95 shrink-0"
+                    >
+                      <CheckCircle2 size={18} />
+                      Concluir Marca/Referência
+                    </button>
+                  </div>
+                </div>
+              )}
+
               <div className="bg-white p-6 rounded-[2rem] shadow-modern border border-gray-50 space-y-6">
                 {/* Header Row */}
                 <div className="flex items-center gap-4 pb-4 border-b border-gray-100">
@@ -2079,106 +2846,269 @@ const App: React.FC = () => {
                 </div>
               </div>
 
-              {/* Data Import & AI Analysis */}
-              <div className="bg-white p-8 rounded-[2.5rem] shadow-modern border border-gray-100 space-y-6">
-                <div className="flex items-center justify-between px-2">
-                  <div className="flex items-center gap-3">
-                    <div className="bg-brand-red w-10 h-10 rounded-xl flex items-center justify-center text-white shadow-lg shadow-brand-red/10">
-                      <BrainCircuit size={20} strokeWidth={2.5} />
-                    </div>
+              {/* Brand Size Turnover Analysis Card */}
+              {brandAnalysis.length > 0 && (
+                <div className="bg-white p-6 sm:p-8 rounded-[2.5rem] shadow-modern border border-gray-100 space-y-6">
+                  <div className="flex items-center justify-between">
                     <div>
-                      <h3 className="font-display font-black text-brand-dark uppercase text-sm leading-none mb-1">IA Consultor</h3>
-                      <p className="text-[8px] text-gray-400 font-bold uppercase tracking-widest">Análise de Tendências</p>
+                      <h3 className="font-display font-black text-brand-dark uppercase text-sm tracking-tight mb-0.5">
+                        Giro de Numerações por Marca
+                      </h3>
+                      <p className="text-[8px] text-gray-400 font-black uppercase tracking-widest">
+                        Análise de saída de tamanhos (Alta, Média e Baixa)
+                      </p>
+                    </div>
+                    <div className="w-9 h-9 rounded-2xl bg-brand-red/10 text-brand-red flex items-center justify-center font-black">
+                      <TrendingUp size={18} />
                     </div>
                   </div>
-                  <button 
-                    onClick={() => setShowPasteInput(!showPasteInput)}
-                    className={`px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-wider transition-all border ${showPasteInput ? 'bg-brand-blue text-white' : 'bg-brand-slate text-gray-400 border-transparent hover:border-brand-blue/30'}`}
-                  >
-                    {pastedData ? 'Dados Externos (+)' : 'Importar PDF'}
-                  </button>
+
+                  <div className="space-y-4">
+                    {brandAnalysis.map(b => (
+                      <div key={b.brandName} className="p-4 bg-brand-slate/40 rounded-3xl border border-gray-100 space-y-3">
+                        <div className="flex items-center justify-between pb-2 border-b border-gray-200/60">
+                          <span className="font-display font-black text-brand-dark uppercase text-xs">{b.brandName}</span>
+                          <span className="text-[9px] font-black bg-brand-blue text-white px-2.5 py-0.5 rounded-full uppercase tracking-wider">
+                            {b.totalItems} pares
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+                          {/* Saindo Bastante */}
+                          <div className="p-2.5 bg-emerald-50/90 border border-emerald-200/60 rounded-2xl space-y-1">
+                            <div className="text-[9px] font-black text-emerald-800 uppercase tracking-wider flex items-center gap-1">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                              Saindo Bastante
+                            </div>
+                            {b.highOutputSizes.length > 0 ? (
+                              <div className="flex flex-wrap gap-1">
+                                {b.highOutputSizes.map(s => (
+                                  <span key={s.size} className="bg-emerald-100 text-emerald-900 px-2 py-0.5 rounded-lg text-[9px] font-black">
+                                    {s.size}: {s.qty}un
+                                  </span>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="text-[9px] text-gray-400 italic">Nenhum</span>
+                            )}
+                          </div>
+
+                          {/* Saindo Mais ou Menos */}
+                          <div className="p-2.5 bg-amber-50/90 border border-amber-200/60 rounded-2xl space-y-1">
+                            <div className="text-[9px] font-black text-amber-800 uppercase tracking-wider flex items-center gap-1">
+                              <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+                              Saindo Mais ou Menos
+                            </div>
+                            {b.mediumOutputSizes.length > 0 ? (
+                              <div className="flex flex-wrap gap-1">
+                                {b.mediumOutputSizes.map(s => (
+                                  <span key={s.size} className="bg-amber-100 text-amber-900 px-2 py-0.5 rounded-lg text-[9px] font-black">
+                                    {s.size}: {s.qty}un
+                                  </span>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="text-[9px] text-gray-400 italic">Nenhum</span>
+                            )}
+                          </div>
+
+                          {/* Saindo Pouco */}
+                          <div className="p-2.5 bg-rose-50/90 border border-rose-200/60 rounded-2xl space-y-1">
+                            <div className="text-[9px] font-black text-rose-800 uppercase tracking-wider flex items-center gap-1">
+                              <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
+                              Saindo Pouco
+                            </div>
+                            {b.lowOutputSizes.length > 0 ? (
+                              <div className="flex flex-wrap gap-1">
+                                {b.lowOutputSizes.map(s => (
+                                  <span key={s.size} className="bg-rose-100 text-rose-900 px-2 py-0.5 rounded-lg text-[9px] font-black">
+                                    {s.size}: {s.qty}un
+                                  </span>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="text-[9px] text-gray-400 italic">Nenhum</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
+              )}
 
-                {showPasteInput && (
-                  <motion.div 
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: 'auto' }}
-                    className="space-y-3"
-                  >
-                    <label className="text-[9px] font-black text-gray-400 uppercase tracking-widest ml-2">Cole o conteúdo dos PDFs aqui:</label>
-                    <textarea 
-                      className="w-full h-32 p-4 bg-brand-slate/30 border border-gray-100 rounded-2xl focus:bg-white focus:border-brand-blue focus:outline-none text-xs font-bold text-brand-dark transition-all"
-                      placeholder="Ex: Tênis Sport 12 un, Camiseta Polo 5 un..."
-                      value={pastedData}
-                      onChange={(e) => setPastedData(e.target.value)}
-                    />
-                  </motion.div>
-                )}
+            </motion.div>
+          )}
 
-                <motion.button 
-                  whileHover={{ scale: 1.01 }}
-                  whileTap={{ scale: 0.99 }}
-                  disabled={isAnalyzing || (counts.length === 0 && !pastedData)}
-                  onClick={handleAIAnalysis}
-                  className="w-full bg-brand-dark text-white py-6 rounded-[2rem] shadow-xl shadow-brand-dark/20 font-display font-black uppercase text-xs tracking-[0.2em] relative overflow-hidden flex items-center justify-center gap-3 disabled:opacity-50"
+          {currentView === AppView.BARCODE_FIREBASE && (
+            <motion.div
+              key="barcode-firebase"
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -15 }}
+              className="space-y-6"
+            >
+              <div className="flex items-center justify-between px-2">
+                <button
+                  type="button"
+                  onClick={() => setCurrentView(AppView.HOME)}
+                  className="flex items-center gap-2 text-xs font-black text-brand-blue uppercase hover:underline"
                 >
-                  {isAnalyzing ? (
-                    <>
-                      <Loader2 size={24} className="animate-spin" />
-                      <span>Processando Inteligência...</span>
-                    </>
-                  ) : (
-                    <>
-                      <BrainCircuit size={24} strokeWidth={2.5} />
-                      <span>Gerar Relatório Estratégico</span>
-                    </>
-                  )}
-                </motion.button>
+                  <ChevronLeft size={18} /> Voltar ao Início
+                </button>
               </div>
 
-              {/* AI Report Result */}
-              {aiReport && (
-                <motion.div 
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="bg-white p-8 rounded-[2.5rem] shadow-modern border border-gray-100 space-y-6"
+              <React.Suspense fallback={<div className="p-8 text-center text-gray-400 font-bold">Carregando Banco de Códigos...</div>}>
+                <BarcodeScannerManager
+                  currentUserId={currentUserId}
+                  showToast={showToast}
+                  onSelectForCounting={handleSelectBarcodeForCounting}
+                  activeLockedReference={activeLockedReference}
+                  onFinishActiveReference={handleFinishActiveReference}
+                />
+              </React.Suspense>
+            </motion.div>
+          )}
+
+          {currentView === AppView.DASHBOARD && (
+            <motion.div
+              key="dashboard"
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -15 }}
+              className="space-y-6"
+            >
+              <React.Suspense fallback={<div className="p-8 text-center text-slate-400 font-bold">Carregando Dashboard de Indicadores...</div>}>
+                <DashboardModule
+                  counts={counts}
+                  onBackToHome={() => setCurrentView(AppView.HOME)}
+                  showToast={showToast}
+                />
+              </React.Suspense>
+            </motion.div>
+          )}
+
+          {currentView === AppView.REPORTS && (
+            <motion.div
+              key="reports"
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -15 }}
+              className="space-y-6"
+            >
+              <React.Suspense fallback={<div className="p-8 text-center text-slate-400 font-bold">Carregando Módulo de Relatórios...</div>}>
+                <ReportsModule
+                  counts={counts}
+                  onBackToHome={() => setCurrentView(AppView.HOME)}
+                  showToast={showToast}
+                />
+              </React.Suspense>
+            </motion.div>
+          )}
+
+          {currentView === AppView.STOCK_MOVEMENTS && (
+            <motion.div
+              key="stock-movements"
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -15 }}
+              className="space-y-6"
+            >
+              <div className="flex items-center justify-between px-2">
+                <button
+                  type="button"
+                  onClick={() => setCurrentView(AppView.HOME)}
+                  className="flex items-center gap-2 text-xs font-black text-brand-blue uppercase hover:underline"
                 >
-                  <div className="flex items-center gap-3 pb-6 border-b border-gray-50">
-                    <div className="bg-brand-red w-12 h-12 rounded-2xl flex items-center justify-center text-white shadow-lg shadow-brand-red/20">
-                      <FileText size={22} strokeWidth={2.5} />
-                    </div>
-                    <div>
-                      <h3 className="font-display font-black text-brand-dark uppercase text-lg leading-none mb-1">Relatório Estratégico</h3>
-                      <p className="text-[9px] text-gray-400 font-black uppercase tracking-widest">Insights da Ideal IA</p>
-                    </div>
-                  </div>
+                  <ChevronLeft size={18} /> Voltar ao Início
+                </button>
+              </div>
 
-                  <div className="prose prose-sm max-w-none text-gray-700 font-medium">
-                    <ReactMarkdown components={{
-                      h1: ({children}) => <h1 className="text-xl font-black text-brand-blue uppercase mt-6 mb-3">{children}</h1>,
-                      h2: ({children}) => <h2 className="text-lg font-black text-brand-dark uppercase mt-6 mb-2 border-l-4 border-brand-red pl-3">{children}</h2>,
-                      h3: ({children}) => <h3 className="text-sm font-black text-brand-dark uppercase mt-4 mb-2 tracking-wide">{children}</h3>,
-                      p: ({children}) => <p className="leading-relaxed mb-4 text-sm">{children}</p>,
-                      ul: ({children}) => <ul className="space-y-2 mb-4 ml-4 list-disc marker:text-brand-red">{children}</ul>,
-                      li: ({children}) => <li className="text-sm">{children}</li>,
-                      strong: ({children}) => <strong className="font-black text-brand-dark">{children}</strong>,
-                    }}>
-                      {aiReport}
-                    </ReactMarkdown>
-                  </div>
-
-                  <button 
-                    onClick={() => window.print()}
-                    className="w-full mt-8 py-5 bg-brand-slate border border-gray-100 rounded-2xl text-brand-blue font-black uppercase text-[10px] tracking-widest hover:bg-white hover:shadow-lg transition-all flex items-center justify-center gap-2"
-                  >
-                    <Download size={16} strokeWidth={3} />
-                    Imprimir Relatório
-                  </button>
-                </motion.div>
-              )}
+              <React.Suspense fallback={<div className="p-8 text-center text-gray-400 font-bold">Carregando Histórico de Movimentações...</div>}>
+                <StockMovementHistoryModule
+                  currentUserId={currentUserId}
+                  userName="Operador"
+                  showToast={showToast}
+                />
+              </React.Suspense>
             </motion.div>
           )}
         </AnimatePresence>
+
+        {/* MISMATCH MODAL IF DIFFERENT BARCODE/BRAND SCANNED WHILE REFERENCE IS LOCKED */}
+        {mismatchModalData && (
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white max-w-md w-full rounded-[2.5rem] p-6 sm:p-8 shadow-2xl border border-red-100 space-y-6 relative overflow-hidden"
+            >
+              <div className="flex items-center gap-4 text-amber-700 bg-amber-50 p-4 rounded-2xl border border-amber-200">
+                <div className="p-3 bg-amber-500 text-white rounded-xl shadow-md shrink-0">
+                  <AlertTriangle size={24} />
+                </div>
+                <div>
+                  <h4 className="font-black uppercase text-sm text-amber-900 leading-tight">
+                    Marca / Referência Diferente!
+                  </h4>
+                  <p className="text-xs font-medium text-amber-800 mt-0.5">
+                    Sua contagem está travada na referência atual.
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-3 text-xs font-medium text-gray-700 bg-slate-50 p-4 rounded-2xl border border-gray-100">
+                <div>
+                  <span className="block text-[10px] font-black uppercase tracking-wider text-gray-400 mb-1">
+                    🔒 Em Contagem Ativa (Travada):
+                  </span>
+                  <p className="font-bold text-sm text-brand-dark uppercase">
+                    {activeLockedReference?.brand || 'Sem Marca'} {activeLockedReference?.model ? `- ${activeLockedReference.model}` : ''}
+                  </p>
+                  {activeLockedReference?.barcode && (
+                    <p className="font-mono text-[11px] text-gray-500 mt-0.5">Cód: {activeLockedReference.barcode}</p>
+                  )}
+                </div>
+
+                <hr className="border-gray-200 my-2" />
+
+                <div>
+                  <span className="block text-[10px] font-black uppercase tracking-wider text-red-500 mb-1">
+                    ⚡ Novo Código Bipado:
+                  </span>
+                  <p className="font-bold text-sm text-red-600 uppercase">
+                    {mismatchModalData.newScannedData.brand || 'Nova Marca / Não Cadastrada'} {mismatchModalData.newScannedData.model ? `- ${mismatchModalData.newScannedData.model}` : ''}
+                  </p>
+                  <p className="font-mono text-[11px] text-gray-500 mt-0.5">Cód: {mismatchModalData.newScannedData.barcode}</p>
+                </div>
+              </div>
+
+              <p className="text-xs text-gray-500 text-center font-medium leading-relaxed">
+                Para evitar misturar marcas ou referências durante a contagem, escolha o que deseja fazer:
+              </p>
+
+              <div className="space-y-3">
+                <button
+                  type="button"
+                  onClick={() => setMismatchModalData(null)}
+                  className="w-full py-4 bg-slate-100 hover:bg-slate-200 text-slate-800 font-black text-xs uppercase tracking-wider rounded-2xl transition-all shadow-sm"
+                >
+                  Permanecer na Marca Atual ({activeLockedReference?.brand || 'Atual'})
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleConfirmSwitchReference(mismatchModalData.newScannedData)}
+                  className="w-full py-4 bg-brand-red hover:bg-red-700 text-white font-black text-xs uppercase tracking-wider rounded-2xl shadow-lg shadow-red-600/30 transition-all flex items-center justify-center gap-2"
+                >
+                  <CheckCircle2 size={18} />
+                  Concluir Atual e Contar Nova Marca ({mismatchModalData.newScannedData.brand || 'Nova'})
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
       </main>
 
       <footer className="no-print pb-40 px-6 text-center">
@@ -2197,6 +3127,14 @@ const App: React.FC = () => {
           >
             <Home size={18} fill={currentView === AppView.HOME ? "currentColor" : "none"} />
             <span className="text-[9px] font-black uppercase tracking-wider leading-none">Início</span>
+          </button>
+
+          <button 
+            onClick={() => setCurrentView(AppView.BARCODE_FIREBASE)}
+            className={`flex-1 flex items-center justify-center gap-1.5 py-4 rounded-[1.8rem] transition-all duration-500 ${currentView === AppView.BARCODE_FIREBASE ? 'bg-white text-brand-blue shadow-xl' : 'text-white/40 hover:text-white'}`}
+          >
+            <Barcode size={18} />
+            <span className="text-[9px] font-black uppercase tracking-wider leading-none">Cód. Barras</span>
           </button>
 
           <button 
@@ -2227,73 +3165,175 @@ const App: React.FC = () => {
 
       {/* PRINT REPORT (Hidden on screen, visible on print) */}
       <div className="print-only">
-        <div className="mb-10 border-b-6 border-brand-blue pb-8 flex justify-between items-end">
+        {/* Executive Header Banner */}
+        <div className="mb-6 p-6 bg-slate-900 text-white rounded-2xl flex justify-between items-center shadow-md">
           <div>
-            <h1 className="text-5xl font-black text-brand-blue tracking-tighter">A IDEAL TECIDOS</h1>
-            <p className="text-brand-red font-black text-lg uppercase tracking-[0.2em]">Calçados e Confecções</p>
+            <h1 className="text-3xl font-black tracking-tight text-white uppercase">A IDEAL TECIDOS</h1>
+            <p className="text-rose-400 font-black text-xs uppercase tracking-[0.25em] mt-0.5">Calçados e Confecções</p>
+            <p className="text-slate-400 text-[10px] font-medium tracking-wide mt-1">SISTEMA DE CONTROLE E GIRO DE ESTOQUE</p>
           </div>
-          <div className="text-right text-xs text-gray-600 font-bold uppercase tracking-widest leading-relaxed">
-            Relatório de Controle Interno<br />
-            {new Date().toLocaleString('pt-BR')}
+          <div className="text-right border-l border-slate-700 pl-6">
+            <span className="inline-block px-3 py-1 bg-slate-800 text-rose-300 rounded text-[9px] font-black uppercase tracking-wider mb-1">
+              Documento Oficial
+            </span>
+            <p className="text-xs font-bold text-slate-200">Emissão: {new Date().toLocaleDateString('pt-BR')} às {new Date().toLocaleTimeString('pt-BR')}</p>
           </div>
         </div>
 
-        <table className="w-full border-collapse">
+        {/* KPI Summary Cards */}
+        <div className="grid grid-cols-3 gap-4 mb-6">
+          <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl">
+            <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Total em Estoque</p>
+            <p className="text-2xl font-black text-brand-red mt-1">
+              {filteredCounts.reduce((sum, item) => sum + item.total, 0)} <span className="text-xs font-bold text-slate-500">un/pares</span>
+            </p>
+          </div>
+          <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl">
+            <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Lotes Registrados</p>
+            <p className="text-2xl font-black text-slate-900 mt-1">{filteredCounts.length} <span className="text-xs font-bold text-slate-500">lotes</span></p>
+          </div>
+          <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl">
+            <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Marcas Analisadas</p>
+            <p className="text-2xl font-black text-brand-blue mt-1">{brandAnalysis.length} <span className="text-xs font-bold text-slate-500">marcas</span></p>
+          </div>
+        </div>
+
+        {/* Primary Inventory Table (Print View) */}
+        <table className="w-full border-collapse text-xs border border-slate-300 mb-8 rounded-lg overflow-hidden shadow-sm">
           <thead>
-            <tr className="bg-brand-blue text-white">
-              <th className="border-none p-4 text-left text-xs uppercase font-black tracking-widest">Data</th>
-              <th className="border-none p-4 text-left text-xs uppercase font-black tracking-widest">Produto</th>
-              <th className="border-none p-4 text-left text-xs uppercase font-black tracking-widest">Modelo</th>
-              <th className="border-none p-4 text-left text-xs uppercase font-black tracking-widest">Marca</th>
-              <th className="border-none p-4 text-left text-xs uppercase font-black tracking-widest">Cor</th>
-              <th className="border-none p-4 text-left text-xs uppercase font-black tracking-widest">Chegada</th>
-              <th className="border-none p-4 text-left text-xs uppercase font-black tracking-widest">Grade</th>
-              <th className="border-none p-4 text-center text-xs uppercase font-black tracking-widest">Total</th>
+            <tr className="bg-slate-900 text-white">
+              <th className="p-2.5 text-left font-black uppercase tracking-wider border-r border-slate-800">Data</th>
+              <th className="p-2.5 text-left font-black uppercase tracking-wider border-r border-slate-800">Produto</th>
+              <th className="p-2.5 text-left font-black uppercase tracking-wider border-r border-slate-800">Modelo</th>
+              <th className="p-2.5 text-left font-black uppercase tracking-wider border-r border-slate-800">Marca</th>
+              <th className="p-2.5 text-left font-black uppercase tracking-wider border-r border-slate-800">Cor</th>
+              <th className="p-2.5 text-center font-black uppercase tracking-wider border-r border-slate-800">Chegada</th>
+              <th className="p-2.5 text-left font-black uppercase tracking-wider border-r border-slate-800">Grade (Numerações)</th>
+              <th className="p-2.5 text-center font-black uppercase tracking-wider">Total</th>
             </tr>
           </thead>
           <tbody>
-            {filteredCounts.map(item => (
-              <tr key={item.id} className="border-b-2 border-gray-100">
-                <td className="p-4 text-xs font-bold text-gray-500">
+            {filteredCounts.map((item, idx) => (
+              <tr key={item.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-slate-50'}>
+                <td className="p-2.5 text-slate-600 font-bold border-b border-r border-slate-200 whitespace-nowrap">
                   {new Date(item.createdAt).toLocaleDateString('pt-BR')}
                 </td>
-                <td className="p-4 text-sm font-black text-brand-dark uppercase tracking-wide">{item.productType}</td>
-                <td className="p-4 text-sm font-black text-brand-blue">
-                  {item.model}
-                </td>
-                <td className="p-4 text-xs font-black text-brand-dark uppercase">{item.brand || '-'}</td>
-                <td className="p-4 text-xs font-black text-gray-500 uppercase">{item.color || '-'}</td>
-                <td className="p-4 text-xs font-black text-gray-400">
+                <td className="p-2.5 font-black text-slate-900 uppercase border-b border-r border-slate-200">{item.productType}</td>
+                <td className="p-2.5 font-black text-brand-blue border-b border-r border-slate-200">{item.model}{item.gender ? ` (${item.gender})` : ''}</td>
+                <td className="p-2.5 font-black text-slate-800 uppercase border-b border-r border-slate-200">{item.brand || '-'}</td>
+                <td className="p-2.5 font-bold text-slate-600 uppercase border-b border-r border-slate-200">{item.color || '-'}</td>
+                <td className="p-2.5 font-bold text-center text-slate-500 border-b border-r border-slate-200 whitespace-nowrap">
                   {item.arrivalMonth && item.arrivalYear ? `${item.arrivalMonth}/${item.arrivalYear}` : (item.arrivalMonth || item.arrivalYear || '-')}
                 </td>
-                <td className="p-4">
-                  <div className="flex flex-wrap gap-2">
+                <td className="p-2.5 border-b border-r border-slate-200">
+                  <div className="flex flex-wrap gap-1">
                     {Object.entries(item.sizes)
                       .filter(([_, qty]) => (qty as any) > 0)
                       .map(([size, qty]) => (
-                        <span key={size} className="bg-gray-100 px-3 py-1 rounded-lg text-xs font-black border border-gray-200">
+                        <span key={size} className="bg-slate-100 text-slate-800 px-1.5 py-0.5 rounded font-black text-[10px] border border-slate-300">
                           {size}: {qty}
                         </span>
                       ))}
                   </div>
                 </td>
-                <td className="p-4 text-center text-lg font-black text-brand-dark">{item.total}</td>
+                <td className="p-2.5 text-center text-sm font-black text-brand-red border-b border-slate-200 whitespace-nowrap">{item.total} un</td>
               </tr>
             ))}
           </tbody>
           <tfoot>
-            <tr className="bg-brand-slate font-black shadow-inner">
-              <td colSpan={7} className="p-6 text-right uppercase text-xs tracking-widest text-gray-500">Total Geral Acumulado</td>
-              <td className="p-6 text-center text-3xl text-brand-red">
-                {filteredCounts.reduce((sum, item) => sum + item.total, 0)}
+            <tr className="bg-slate-900 text-white font-black">
+              <td colSpan={7} className="p-3 text-right uppercase text-xs tracking-wider">Total Geral em Estoque</td>
+              <td className="p-3 text-center text-sm bg-brand-red text-white">
+                {filteredCounts.reduce((sum, item) => sum + item.total, 0)} un
               </td>
             </tr>
           </tfoot>
         </table>
 
-        <div className="mt-20 pt-10 border-t-4 border-dashed border-gray-200 text-center text-xs text-gray-400 font-black uppercase tracking-[0.3em]">
-          Documento para uso exclusivo - Ideal Tecidos
-        </div>
+        {/* CONTROLE DE SAÍDA DE NUMERAÇÕES POR MARCA (PRINT TABLE) */}
+        {brandAnalysis.length > 0 && (
+          <div className="mt-8">
+            <div className="mb-3 pb-2 border-b-2 border-brand-red flex justify-between items-end">
+              <div>
+                <h2 className="text-lg font-black text-slate-900 tracking-tight uppercase">
+                  Controle de Giro de Numerações por Marca
+                </h2>
+                <p className="text-xs text-slate-500 font-medium uppercase tracking-wider">
+                  Classificação por velocidade de saída (Alta, Média e Baixa saída)
+                </p>
+              </div>
+            </div>
+
+            <table className="w-full border-collapse text-xs border border-slate-300 rounded-lg overflow-hidden shadow-sm">
+              <thead>
+                <tr className="bg-brand-red text-white">
+                  <th className="p-2.5 text-left font-black uppercase tracking-wider border-r border-rose-800">Marca</th>
+                  <th className="p-2.5 text-center font-black uppercase tracking-wider border-r border-rose-800">Total</th>
+                  <th className="p-2.5 text-left font-black uppercase tracking-wider bg-emerald-800 border-r border-emerald-900">
+                    🟢 Saindo Bastante (Alta)
+                  </th>
+                  <th className="p-2.5 text-left font-black uppercase tracking-wider bg-amber-700 border-r border-amber-800">
+                    🟡 Saindo Mais ou Menos (Média)
+                  </th>
+                  <th className="p-2.5 text-left font-black uppercase tracking-wider bg-rose-800">
+                    🔴 Saindo Pouco (Baixa)
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {brandAnalysis.map((b, idx) => (
+                  <tr key={b.brandName} className={idx % 2 === 0 ? 'bg-white' : 'bg-slate-50'}>
+                    <td className="p-2.5 font-black text-slate-900 uppercase border-b border-r border-slate-200 align-top">
+                      {b.brandName}
+                    </td>
+                    <td className="p-2.5 font-black text-center text-brand-blue border-b border-r border-slate-200 align-top whitespace-nowrap">
+                      {b.totalItems} un
+                    </td>
+                    <td className="p-2.5 border-b border-r border-slate-200 align-top font-bold bg-emerald-50/40">
+                      {b.highOutputSizes.length > 0 ? (
+                        <div className="flex flex-wrap gap-1">
+                          {b.highOutputSizes.map(s => (
+                            <span key={s.size} className="bg-emerald-100 text-emerald-900 px-1.5 py-0.5 rounded border border-emerald-300 font-black text-[10px]">
+                              Tam {s.size} ({s.qty}un)
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="text-slate-400 italic font-normal text-[10px]">-</span>
+                      )}
+                    </td>
+                    <td className="p-2.5 border-b border-r border-slate-200 align-top font-bold bg-amber-50/40">
+                      {b.mediumOutputSizes.length > 0 ? (
+                        <div className="flex flex-wrap gap-1">
+                          {b.mediumOutputSizes.map(s => (
+                            <span key={s.size} className="bg-amber-100 text-amber-900 px-1.5 py-0.5 rounded border border-amber-300 font-black text-[10px]">
+                              Tam {s.size} ({s.qty}un)
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="text-slate-400 italic font-normal text-[10px]">-</span>
+                      )}
+                    </td>
+                    <td className="p-2.5 border-b border-slate-200 align-top font-bold bg-rose-50/40">
+                      {b.lowOutputSizes.length > 0 ? (
+                        <div className="flex flex-wrap gap-1">
+                          {b.lowOutputSizes.map(s => (
+                            <span key={s.size} className="bg-rose-100 text-rose-900 px-1.5 py-0.5 rounded border border-rose-300 font-black text-[10px]">
+                              Tam {s.size} ({s.qty}un)
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="text-slate-400 italic font-normal text-[10px]">-</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
       {/* TOAST NOTIFICATION */}
       <AnimatePresence>
@@ -2562,6 +3602,48 @@ const App: React.FC = () => {
           </motion.div>
         )}
       </AnimatePresence>
+
+      <React.Suspense fallback={null}>
+        {/* MODAL 1: Bipagem Contínua (USB) */}
+        {isContinuousModalOpen && (
+          <ContinuousScannerModal
+            isOpen={isContinuousModalOpen}
+            onClose={() => setIsContinuousModalOpen(false)}
+            userId={currentUserId}
+            onSaveCount={saveContinuousCount}
+            showToast={showToast}
+          />
+        )}
+
+        {/* MODAL 2: Gerador e Impressor de Etiquetas de Caixas */}
+        {isLabelModalOpen && (
+          <LabelGeneratorModal
+            isOpen={isLabelModalOpen}
+            onClose={() => setIsLabelModalOpen(false)}
+            showToast={showToast}
+          />
+        )}
+
+        {/* MODAL 3: Relatório de Divergência ERP */}
+        {isDivergenceModalOpen && (
+          <DivergenceReportModal
+            isOpen={isDivergenceModalOpen}
+            onClose={() => setIsDivergenceModalOpen(false)}
+            counts={counts}
+            showToast={showToast}
+          />
+        )}
+
+        {/* MODAL 4: Exportação Personalizada para ERPs */}
+        {isErpExporterModalOpen && (
+          <ErpExporterModal
+            isOpen={isErpExporterModalOpen}
+            onClose={() => setIsErpExporterModalOpen(false)}
+            counts={counts}
+            showToast={showToast}
+          />
+        )}
+      </React.Suspense>
     </div>
   );
 };

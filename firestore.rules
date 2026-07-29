@@ -44,6 +44,18 @@ service cloud.firestore {
         && (!data.keys().contains('color') || data.color is string);
     }
 
+    function isValidBarcodeReference(data) {
+      return data.keys().hasAll(['barcode', 'brand', 'model', 'gridType', 'sizes', 'total', 'createdAt', 'userId'])
+        && data.barcode is string
+        && data.brand is string
+        && data.model is string
+        && data.gridType in ['LETTER', 'NUMERIC']
+        && data.sizes is map
+        && data.total is number && data.total >= 0
+        && data.createdAt is number
+        && (data.userId.matches('^device_.*') || data.userId == 'guest' || (request.auth != null && data.userId == request.auth.uid));
+    }
+
     function isValidUser(data) {
       return data.keys().hasAll(['uid', 'email'])
         && data.uid == request.auth.uid
@@ -71,6 +83,22 @@ service cloud.firestore {
         && (
           // Action: Edit fields
           incoming().diff(existing()).affectedKeys().hasOnly(['productType', 'model', 'brand', 'color', 'arrivalMonth', 'arrivalYear', 'gridType', 'sizes', 'total'])
+        );
+        
+      allow delete: if true;
+    }
+
+    match /inventory_barcodes/{barcode} {
+      allow read: if true;
+      
+      allow create: if (incoming().userId == 'guest' || incoming().userId.matches('^device_.*') || isSignedIn())
+        && isValidId(barcode) 
+        && isValidBarcodeReference(incoming());
+      
+      allow update: if (incoming().userId == 'guest' || incoming().userId.matches('^device_.*') || isSignedIn())
+        && isValidBarcodeReference(incoming())
+        && (
+          incoming().diff(existing()).affectedKeys().hasOnly(['barcode', 'brand', 'model', 'productType', 'color', 'arrivalMonth', 'arrivalYear', 'gridType', 'sizes', 'total', 'updatedAt', 'lastCountDate', 'gender', 'countHistory', 'userId', 'createdAt'])
         );
         
       allow delete: if true;

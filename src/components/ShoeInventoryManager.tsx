@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import { Html5Qrcode } from 'html5-qrcode';
 import { 
   Plus, 
   Trash2, 
@@ -27,7 +28,10 @@ import {
   ToggleLeft,
   ToggleRight,
   TrendingUp,
-  XCircle
+  XCircle,
+  Camera,
+  Layers,
+  Tag
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -47,6 +51,15 @@ import {
   seedDemoProductsIfNeeded,
   getBrandIdFromName
 } from '../services/inventoryDb';
+import { 
+  getReferenceByBarcode, 
+  saveBarcodeReference, 
+  verificarCodigoDuplicado, 
+  buscarProdutoPorCodigo, 
+  cadastrarCodigo, 
+  atualizarProdutoPorCodigo 
+} from '../services/barcodeFirebaseService';
+import { PRODUCT_TYPES, NUMERIC_SIZES, LETTER_SIZES, MONTHS, YEARS } from '../../constants';
 
 interface ShoeInventoryManagerProps {
   currentUserId: string;
@@ -67,12 +80,27 @@ export const ShoeInventoryManager: React.FC<ShoeInventoryManagerProps> = ({ curr
   const [activeCountSession, setActiveCountSession] = useState<ShoeInventory | null>(null);
   const [detailedSession, setDetailedSession] = useState<ShoeInventory | null>(null);
   
-  // Form states
-  const [newSessionForm, setNewSessionForm] = useState({
-    employee: '',
-    observations: ''
-  });
+  // 2-Step New Count Workflow Form states
   const [isStartingNewSession, setIsStartingNewSession] = useState(false);
+  const [newCountStep, setNewCountStep] = useState<1 | 2>(1);
+  const [newCountBarcode, setNewCountBarcode] = useState('');
+  const [newCountProductFound, setNewCountProductFound] = useState(false);
+  const [isNewCountCameraActive, setIsNewCountCameraActive] = useState(false);
+  const newCountQrRef = useRef<Html5Qrcode | null>(null);
+  const newCountBarcodeRef = useRef<HTMLInputElement>(null);
+
+  const [newSessionForm, setNewSessionForm] = useState({
+    barcode: '',
+    brand: '',
+    model: '',
+    color: '',
+    category: 'Tênis Adulto Masculino',
+    arrivalMonth: (new Date().getMonth() + 1).toString().padStart(2, '0'),
+    arrivalYear: new Date().getFullYear().toString(),
+    employee: '',
+    observations: '',
+    sizes: { '34': 1, '35': 1, '36': 1, '37': 1, '38': 1 } as Record<string, number>
+  });
   
   // Brand Form State
   const [editingBrand, setEditingBrand] = useState<ShoeBrand | null>(null);
@@ -94,7 +122,7 @@ export const ShoeInventoryManager: React.FC<ShoeInventoryManagerProps> = ({ curr
   const [missingForm, setMissingForm] = useState({
     brand: '',
     model: '',
-    category: 'Sapatilha Feminina Adulta',
+    category: 'Tênis Adulto Masculino',
     color: '',
     size: '',
     expectedQty: 1
@@ -241,6 +269,215 @@ export const ShoeInventoryManager: React.FC<ShoeInventoryManagerProps> = ({ curr
     }
   };
 
+  // --- 2-STEP NEW COUNT WORKFLOW HANDLERS ---
+  const handleStep1BarcodeSubmit = async (codeToUse?: string) => {
+    const code = (codeToUse || newCountBarcode).trim();
+    if (!code) {
+      showToast('Por favor, informe ou bipe o código de barras', 'error');
+      return;
+    }
+
+    try {
+      // 1. Search in Firebase / Local DB by unique barcode
+      let existingRef = await getReferenceByBarcode(code);
+      let localProd = await getLocalProductByBarcode(code);
+
+      if (existingRef) {
+        setNewCountProductFound(true);
+        setNewSessionForm({
+          barcode: existingRef.barcode,
+          brand: existingRef.brand || selectedBrandName || (brands[0]?.name || 'Outras Marcas'),
+          model: existingRef.model || '',
+          color: existingRef.color || '',
+          category: existingRef.productType || 'Sapatilha Feminina Adulta',
+          arrivalMonth: existingRef.arrivalMonth || (new Date().getMonth() + 1).toString().padStart(2, '0'),
+          arrivalYear: existingRef.arrivalYear || new Date().getFullYear().toString(),
+          employee: newSessionForm.employee || '',
+          observations: newSessionForm.observations || '',
+          sizes: existingRef.sizes && Object.keys(existingRef.sizes).length > 0 
+            ? { ...existingRef.sizes } 
+            : { '35': 1, '36': 1, '37': 1 }
+        });
+        showToast('Produto localizado com sucesso!');
+      } else if (localProd) {
+        setNewCountProductFound(true);
+        setNewSessionForm({
+          barcode: localProd.barcode,
+          brand: localProd.brand || selectedBrandName || (brands[0]?.name || 'Outras Marcas'),
+          model: localProd.model || '',
+          color: localProd.color || '',
+          category: localProd.category || 'Sapatilha Feminina Adulta',
+          arrivalMonth: (new Date().getMonth() + 1).toString().padStart(2, '0'),
+          arrivalYear: new Date().getFullYear().toString(),
+          employee: newSessionForm.employee || '',
+          observations: newSessionForm.observations || '',
+          sizes: { [localProd.size]: localProd.countedQty || 1 }
+        });
+        showToast('Produto localizado!');
+      } else {
+        setNewCountProductFound(false);
+        setNewSessionForm({
+          barcode: code,
+          brand: selectedBrandName || (brands.length > 0 ? brands[0].name : 'Outras Marcas'),
+          model: '',
+          color: '',
+          category: 'Sapatilha Feminina Adulta',
+          arrivalMonth: (new Date().getMonth() + 1).toString().padStart(2, '0'),
+          arrivalYear: new Date().getFullYear().toString(),
+          employee: newSessionForm.employee || '',
+          observations: newSessionForm.observations || '',
+          sizes: { '34': 1, '35': 1, '36': 1, '37': 1, '38': 1 }
+        });
+        showToast('Código lido! Preencha a marca, modelo, cor, datas e tamanhos.');
+      }
+
+      setNewCountStep(2);
+    } catch (err) {
+      console.error(err);
+      showToast('Erro ao consultar código de barras', 'error');
+    }
+  };
+
+  const handleConfirmAndStartSession = async () => {
+    if (!newSessionForm.barcode.trim()) {
+      showToast('Código de barras é obrigatório', 'error');
+      return;
+    }
+    if (!newSessionForm.brand.trim()) {
+      showToast('Selecione ou informe a marca do calçado', 'error');
+      return;
+    }
+    if (!newSessionForm.model.trim()) {
+      showToast('Informe o modelo do calçado', 'error');
+      return;
+    }
+
+    try {
+      const totalPairs = Object.values(newSessionForm.sizes).reduce((acc, q) => acc + (q || 0), 0);
+
+      // Save/Update reference in Firebase
+      await saveBarcodeReference({
+        barcode: newSessionForm.barcode.trim(),
+        brand: newSessionForm.brand.trim(),
+        model: newSessionForm.model.trim(),
+        productType: newSessionForm.category,
+        color: newSessionForm.color.trim(),
+        arrivalMonth: newSessionForm.arrivalMonth,
+        arrivalYear: newSessionForm.arrivalYear,
+        gridType: 'NUMERIC',
+        sizes: newSessionForm.sizes,
+        total: totalPairs,
+        userId: currentUserId
+      });
+
+      // Save individual local products
+      for (const [sz, qty] of Object.entries(newSessionForm.sizes)) {
+        if (qty > 0) {
+          const prod: ShoeProduct = {
+            barcode: newSessionForm.barcode.trim(),
+            brand: newSessionForm.brand.trim(),
+            model: newSessionForm.model.trim(),
+            category: newSessionForm.category,
+            color: newSessionForm.color.trim(),
+            size: sz,
+            expectedQty: qty,
+            countedQty: qty,
+            lastUpdated: Date.now(),
+            lastCountedTime: Date.now()
+          };
+          await saveLocalProduct(prod, currentUserId);
+        }
+      }
+
+      // Create new Inventory session
+      const date = new Date();
+      const formattedDate = date.toLocaleDateString('pt-BR');
+      const formattedTime = date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+
+      const countsMap: Record<string, number> = {
+        [newSessionForm.barcode.trim()]: totalPairs
+      };
+
+      const newSession: ShoeInventory = {
+        id: `count_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        name: `Contagem ${newSessionForm.brand.trim()}`,
+        brand: newSessionForm.brand.trim(),
+        description: `Contagem de ${newSessionForm.model.trim()} (${newSessionForm.color.trim()})`,
+        date: formattedDate,
+        time: formattedTime,
+        employee: newSessionForm.employee.trim() || 'Conferente',
+        observations: newSessionForm.observations.trim(),
+        status: 'IN_PROGRESS',
+        brandsStatus: { [newSessionForm.brand.trim()]: 'IN_PROGRESS' },
+        counts: countsMap,
+        createdAt: Date.now()
+      };
+
+      await saveLocalInventory(newSession, currentUserId);
+      setActiveCountSession(newSession);
+      setIsStartingNewSession(false);
+      await loadData();
+
+      showToast(`Contagem iniciada para ${newSessionForm.brand} - ${newSessionForm.model}!`);
+      setTimeout(() => barcodeInputRef.current?.focus(), 350);
+    } catch (err) {
+      console.error(err);
+      showToast('Erro ao salvar e iniciar contagem', 'error');
+    }
+  };
+
+  const startNewCountCamera = () => {
+    setIsNewCountCameraActive(true);
+    setTimeout(async () => {
+      try {
+        const devices = await Html5Qrcode.getCameras().catch(() => []);
+        const html5QrCode = new Html5Qrcode("new-count-camera-reader");
+        newCountQrRef.current = html5QrCode;
+
+        let cameraIdOrConfig: any = { facingMode: "environment" };
+        if (devices && devices.length > 0) {
+          const backCam = devices.find(d => 
+            d.label.toLowerCase().includes('back') || 
+            d.label.toLowerCase().includes('traseira') || 
+            d.label.toLowerCase().includes('environment') ||
+            d.label.toLowerCase().includes('rear')
+          );
+          if (backCam) cameraIdOrConfig = backCam.id;
+          else cameraIdOrConfig = devices[devices.length - 1].id;
+        }
+
+        await html5QrCode.start(
+          cameraIdOrConfig,
+          { fps: 15, qrbox: { width: 260, height: 160 } },
+          (decodedText) => {
+            stopNewCountCamera();
+            setNewCountBarcode(decodedText);
+            handleStep1BarcodeSubmit(decodedText);
+          },
+          () => {}
+        );
+      } catch (err) {
+        console.warn("Camera start error:", err);
+        showToast("Não foi possível acessar a câmera. Digite o código de barras.", "error");
+        setIsNewCountCameraActive(false);
+      }
+    }, 250);
+  };
+
+  const stopNewCountCamera = async () => {
+    if (newCountQrRef.current) {
+      try {
+        if (newCountQrRef.current.isScanning) {
+          await newCountQrRef.current.stop();
+        }
+      } catch (e) {
+        console.warn(e);
+      }
+      newCountQrRef.current = null;
+    }
+    setIsNewCountCameraActive(false);
+  };
+
   // Start New Count Session
   const handleStartCountSession = async () => {
     if (!selectedBrandName) return;
@@ -268,7 +505,18 @@ export const ShoeInventoryManager: React.FC<ShoeInventoryManagerProps> = ({ curr
       await saveLocalInventory(newSession, currentUserId);
       setActiveCountSession(newSession);
       setIsStartingNewSession(false);
-      setNewSessionForm({ employee: '', observations: '' });
+      setNewSessionForm({
+        barcode: '',
+        brand: '',
+        model: '',
+        color: '',
+        category: 'Sapatilha Feminina Adulta',
+        arrivalMonth: (new Date().getMonth() + 1).toString().padStart(2, '0'),
+        arrivalYear: new Date().getFullYear().toString(),
+        employee: '',
+        observations: '',
+        sizes: { '34': 1, '35': 1, '36': 1, '37': 1, '38': 1 }
+      });
       await loadData();
       
       // Auto-focus barcode input
@@ -293,7 +541,28 @@ export const ShoeInventoryManager: React.FC<ShoeInventoryManagerProps> = ({ curr
     }
 
     try {
-      const product = await getLocalProductByBarcode(barcode);
+      let product = await getLocalProductByBarcode(barcode);
+
+      // Fallback: Check Firebase if not found in local DB
+      if (!product) {
+        const fbRef = await getReferenceByBarcode(barcode);
+        if (fbRef) {
+          product = {
+            barcode: fbRef.barcode,
+            brand: fbRef.brand,
+            model: fbRef.model,
+            category: fbRef.productType || 'Calçado',
+            color: fbRef.color || '',
+            size: Object.keys(fbRef.sizes || {})[0] || 'UN',
+            expectedQty: fbRef.total || 1,
+            countedQty: 0,
+            lastUpdated: Date.now(),
+            lastCountedTime: Date.now()
+          };
+          await saveLocalProduct(product, currentUserId);
+        }
+      }
+
       if (product) {
         // Enforce brand matches active count brand
         if (product.brand.toLowerCase() !== activeCountSession.brand?.toLowerCase()) {
@@ -344,12 +613,23 @@ export const ShoeInventoryManager: React.FC<ShoeInventoryManagerProps> = ({ curr
 
   // Save new registered product during count
   const handleSaveMissingProduct = async () => {
+    if (!missingBarcode.trim()) {
+      showToast('Informe o código de barras', 'error');
+      return;
+    }
     if (!missingForm.model.trim() || !missingForm.color.trim() || !missingForm.size.trim()) {
       showToast('Preencha modelo, cor e tamanho', 'error');
       return;
     }
 
     try {
+      // Check duplicate barcode
+      const isDuplicate = await verificarCodigoDuplicado(missingBarcode.trim());
+      if (isDuplicate) {
+        showToast('Este produto/código de barras já está cadastrado no sistema!', 'error');
+        return;
+      }
+
       const newProd: ShoeProduct = {
         barcode: missingBarcode,
         brand: missingForm.brand || activeCountSession?.brand || 'Outras Marcas',
@@ -364,6 +644,23 @@ export const ShoeInventoryManager: React.FC<ShoeInventoryManagerProps> = ({ curr
       };
 
       await saveLocalProduct(newProd, currentUserId);
+
+      // Save to Firebase using Barcode as Unique Key!
+      try {
+        await saveBarcodeReference({
+          barcode: missingBarcode,
+          brand: newProd.brand,
+          model: newProd.model,
+          productType: newProd.category,
+          color: newProd.color,
+          gridType: 'NUMERIC',
+          sizes: { [newProd.size]: 1 },
+          total: 1,
+          userId: currentUserId
+        });
+      } catch (fbErr) {
+        console.warn("Notice: Firebase barcode save failed, stored locally:", fbErr);
+      }
       
       if (activeCountSession) {
         const updatedSession = { ...activeCountSession };
@@ -375,7 +672,7 @@ export const ShoeInventoryManager: React.FC<ShoeInventoryManagerProps> = ({ curr
       setShowMissingProductModal(false);
       setLastScannedProduct(newProd);
       setScannedFeedback({ 
-        message: `Cadastrado e Lido: ${newProd.model} (Tam: ${newProd.size})`, 
+        message: `Cadastrado no Firebase e Lido: ${newProd.model} (Tam: ${newProd.size})`, 
         type: 'success' 
       });
       
@@ -950,6 +1247,322 @@ export const ShoeInventoryManager: React.FC<ShoeInventoryManagerProps> = ({ curr
             exit={{ opacity: 0, y: -15 }}
             className="space-y-6"
           >
+            {/* PROMINENT NEW COUNT WITH BARCODE ACTION CARD */}
+            <div 
+              onClick={() => {
+                setIsStartingNewSession(true);
+                setNewCountStep(1);
+                setNewCountBarcode('');
+              }}
+              className="bg-gradient-to-r from-brand-blue via-indigo-600 to-blue-700 text-white p-6 rounded-[2.5rem] shadow-modern-lg cursor-pointer space-y-2 border border-white/10 group relative overflow-hidden transition-all hover:scale-[1.01]"
+            >
+              <div className="flex items-center justify-between relative z-10">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 rounded-2xl bg-white/20 text-white border border-white/20 flex items-center justify-center shadow-inner">
+                    <Barcode size={26} strokeWidth={2.5} />
+                  </div>
+                  <div>
+                    <h3 className="font-display font-black text-lg uppercase tracking-wider text-white">Nova Contagem por Código de Barras</h3>
+                    <p className="text-[11px] text-white/90 font-bold mt-0.5">
+                      1º Passo: Bipe o Código → 2º Passo: Marca, Modelo, Cor, Mês/Ano e Tamanhos
+                    </p>
+                  </div>
+                </div>
+                <div className="px-4 py-2 bg-white text-brand-blue font-black uppercase text-[10px] tracking-wider rounded-xl shadow-md group-hover:bg-blue-50 transition-colors">
+                  Iniciar Leitura
+                </div>
+              </div>
+            </div>
+
+            {/* 2-STEP NEW COUNT WIZARD */}
+            {isStartingNewSession && (
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.98 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="p-4 sm:p-6 bg-white rounded-2xl sm:rounded-[2.5rem] border-2 border-brand-blue/30 shadow-xl space-y-4 sm:space-y-6"
+              >
+                {/* Wizard Header */}
+                <div className="flex justify-between items-center pb-3 sm:pb-4 border-b border-gray-100 gap-2">
+                  <div className="space-y-1 min-w-0">
+                    <span className="text-[8px] sm:text-[9px] font-black text-brand-blue uppercase tracking-widest bg-brand-blue/10 px-2.5 py-1 rounded-full inline-block">
+                      NOVA CONTAGEM FÍSICA DE ESTOQUE
+                    </span>
+                    <h4 className="font-display font-black text-base sm:text-xl text-brand-dark uppercase truncate">
+                      {newCountStep === 1 
+                        ? 'Passo 1 de 2: Leitura do Código de Barras' 
+                        : 'Passo 2 de 2: Marca, Modelo, Cor e Tamanhos'}
+                    </h4>
+                  </div>
+                  <button 
+                    onClick={() => {
+                      setIsStartingNewSession(false);
+                      stopNewCountCamera();
+                    }} 
+                    className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-brand-slate text-gray-400 hover:text-brand-dark hover:bg-gray-200 flex items-center justify-center transition-all shrink-0"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+
+                {/* STEP 1: BARCODE SCANNER / TYPING */}
+                {newCountStep === 1 && (
+                  <div className="space-y-4 sm:space-y-5">
+                    <div className="p-3.5 sm:p-4 bg-brand-slate rounded-2xl border border-gray-100 text-center">
+                      <p className="text-xs text-brand-dark font-bold uppercase tracking-wide">
+                        Bipe o código de barras da caixa com o leitor USB/Bluetooth ou use a câmera do celular
+                      </p>
+                      <p className="text-[10px] text-gray-400 font-medium mt-1">
+                        Ao ler, o sistema abre automaticamente o segundo passo com marca, modelo, cor, datas e tamanhos.
+                      </p>
+                    </div>
+
+                    {isNewCountCameraActive ? (
+                      <div className="space-y-3">
+                        <div id="new-count-camera-reader" className="w-full max-w-sm mx-auto overflow-hidden rounded-2xl border-2 border-brand-blue shadow-md"></div>
+                        <button 
+                          onClick={stopNewCountCamera}
+                          className="w-full py-3 bg-red-100 hover:bg-red-200 text-red-600 font-black text-xs uppercase rounded-xl transition-all"
+                        >
+                          Fechar Câmera
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col sm:flex-row gap-2.5 sm:gap-3">
+                        <div className="relative flex-1">
+                          <input 
+                            ref={newCountBarcodeRef}
+                            type="text"
+                            placeholder="Passe o leitor ou digite o código..."
+                            value={newCountBarcode}
+                            onChange={e => setNewCountBarcode(e.target.value)}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                handleStep1BarcodeSubmit();
+                              }
+                            }}
+                            className="w-full px-4 sm:px-6 py-3.5 sm:py-4 bg-brand-slate rounded-2xl border border-gray-200 font-mono text-base sm:text-lg font-bold text-center text-brand-dark focus:border-brand-blue focus:ring-4 focus:ring-brand-blue/10 focus:outline-none transition-all placeholder:text-gray-300 placeholder:text-xs sm:placeholder:text-sm placeholder:font-sans"
+                            autoFocus
+                          />
+                        </div>
+                        <button 
+                          onClick={() => handleStep1BarcodeSubmit()}
+                          className="w-full sm:w-auto px-5 py-3.5 sm:py-4 bg-brand-blue text-white font-black text-xs uppercase tracking-wider rounded-2xl hover:brightness-110 flex items-center justify-center gap-2 shadow-md shadow-brand-blue/20 transition-all active:scale-95 shrink-0"
+                        >
+                          <Barcode size={18} />
+                          Bipar / Continuar
+                        </button>
+                        <button 
+                          onClick={startNewCountCamera}
+                          className="w-full sm:w-auto px-4 py-3.5 sm:py-4 bg-gray-100 text-brand-dark hover:bg-brand-blue hover:text-white font-black text-xs uppercase tracking-wider rounded-2xl flex items-center justify-center gap-2 transition-all active:scale-95 shrink-0"
+                        >
+                          <Camera size={18} />
+                          Usar Câmera
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* STEP 2: MARCA, MODELO, COR, DATAS/MESES E TAMANHOS */}
+                {newCountStep === 2 && (
+                  <div className="space-y-6">
+                    <div className="flex items-center justify-between p-4 rounded-2xl bg-brand-slate border border-gray-100 flex-wrap gap-2">
+                      <div className="flex items-center gap-3">
+                        <div className="w-9 h-9 rounded-xl bg-brand-blue/10 text-brand-blue flex items-center justify-center font-bold">
+                          <Barcode size={18} />
+                        </div>
+                        <div>
+                          <span className="text-[8px] font-black text-gray-400 uppercase tracking-widest block">Código Lido</span>
+                          <span className="font-mono text-base font-black text-brand-dark">{newSessionForm.barcode}</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className={`text-[9px] font-black uppercase px-3 py-1 rounded-full ${newCountProductFound ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>
+                          {newCountProductFound ? '✓ Produto Localizado' : '+ Novo Cadastro'}
+                        </span>
+                        <button 
+                          onClick={() => setNewCountStep(1)} 
+                          className="text-xs text-brand-blue font-black uppercase hover:underline ml-2"
+                        >
+                          Trocar Código
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                      {/* Marca */}
+                      <div>
+                        <label className="text-[10px] font-black text-gray-400 uppercase block mb-1">Marca do Calçado</label>
+                        <select 
+                          value={newSessionForm.brand}
+                          onChange={e => setNewSessionForm({ ...newSessionForm, brand: e.target.value })}
+                          className="w-full px-4 py-3 bg-brand-slate rounded-xl border border-gray-200 font-bold text-sm text-brand-dark focus:outline-none"
+                        >
+                          {brands.map(b => (
+                            <option key={b.id} value={b.name}>{b.name}</option>
+                          ))}
+                          <option value="Outras Marcas">Outras Marcas</option>
+                        </select>
+                      </div>
+
+                      {/* Modelo */}
+                      <div>
+                        <label className="text-[10px] font-black text-gray-400 uppercase block mb-1">Modelo do Calçado</label>
+                        <input 
+                          type="text"
+                          placeholder="Ex: Sapatilha Soft Flex"
+                          value={newSessionForm.model}
+                          onChange={e => setNewSessionForm({ ...newSessionForm, model: e.target.value })}
+                          className="w-full px-4 py-3 bg-brand-slate rounded-xl border border-gray-200 font-bold text-sm text-brand-dark focus:outline-none"
+                        />
+                      </div>
+
+                      {/* Cor */}
+                      <div>
+                        <label className="text-[10px] font-black text-gray-400 uppercase block mb-1">Cor / Acabamento</label>
+                        <input 
+                          type="text"
+                          placeholder="Ex: Preto Nobuck / Nude"
+                          value={newSessionForm.color}
+                          onChange={e => setNewSessionForm({ ...newSessionForm, color: e.target.value })}
+                          className="w-full px-4 py-3 bg-brand-slate rounded-xl border border-gray-200 font-bold text-sm text-brand-dark focus:outline-none"
+                        />
+                      </div>
+
+                      {/* Categoria */}
+                      <div>
+                        <label className="text-[10px] font-black text-gray-400 uppercase block mb-1">Categoria / Tipo</label>
+                        <select 
+                          value={newSessionForm.category}
+                          onChange={e => setNewSessionForm({ ...newSessionForm, category: e.target.value })}
+                          className="w-full px-4 py-3 bg-brand-slate rounded-xl border border-gray-200 font-bold text-sm text-brand-dark focus:outline-none"
+                        >
+                          {PRODUCT_TYPES.map(cat => (
+                            <option key={cat} value={cat}>{cat}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Mês de Chegada (Datas e Meses) */}
+                      <div>
+                        <label className="text-[10px] font-black text-gray-400 uppercase block mb-1">Mês de Chegada</label>
+                        <select 
+                          value={newSessionForm.arrivalMonth}
+                          onChange={e => setNewSessionForm({ ...newSessionForm, arrivalMonth: e.target.value })}
+                          className="w-full px-4 py-3 bg-brand-slate rounded-xl border border-gray-200 font-bold text-sm text-brand-dark focus:outline-none"
+                        >
+                          {MONTHS.map(m => (
+                            <option key={m} value={m}>Mês {m}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Ano de Chegada (Datas e Meses) */}
+                      <div>
+                        <label className="text-[10px] font-black text-gray-400 uppercase block mb-1">Ano de Chegada</label>
+                        <select 
+                          value={newSessionForm.arrivalYear}
+                          onChange={e => setNewSessionForm({ ...newSessionForm, arrivalYear: e.target.value })}
+                          className="w-full px-4 py-3 bg-brand-slate rounded-xl border border-gray-200 font-bold text-sm text-brand-dark focus:outline-none"
+                        >
+                          {YEARS.map(y => (
+                            <option key={y} value={y}>{y}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Responsável */}
+                      <div>
+                        <label className="text-[10px] font-black text-gray-400 uppercase block mb-1">Responsável / Conferente</label>
+                        <input 
+                          type="text"
+                          placeholder="Nome do operador"
+                          value={newSessionForm.employee}
+                          onChange={e => setNewSessionForm({ ...newSessionForm, employee: e.target.value })}
+                          className="w-full px-4 py-3 bg-brand-slate rounded-xl border border-gray-200 font-bold text-sm text-brand-dark focus:outline-none"
+                        />
+                      </div>
+
+                      {/* Observações */}
+                      <div className="sm:col-span-2">
+                        <label className="text-[10px] font-black text-gray-400 uppercase block mb-1">Observações do Lote</label>
+                        <input 
+                          type="text"
+                          placeholder="Ex: Lote da prateleira central (opcional)"
+                          value={newSessionForm.observations}
+                          onChange={e => setNewSessionForm({ ...newSessionForm, observations: e.target.value })}
+                          className="w-full px-4 py-3 bg-brand-slate rounded-xl border border-gray-200 font-bold text-sm text-brand-dark focus:outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    {/* TAMANHOS / NUMERAÇÕES E QUANTIDADES */}
+                    <div className="space-y-3 pt-3 border-t border-gray-100">
+                      <div className="flex justify-between items-center">
+                        <label className="text-xs font-black text-brand-dark uppercase tracking-wider">
+                          Grade de Tamanhos / Numerações Encontradas
+                        </label>
+                        <span className="text-[10px] font-black text-brand-blue uppercase bg-brand-blue/10 px-3 py-1 rounded-full">
+                          Total: {Object.values(newSessionForm.sizes).reduce((a, b) => a + (b || 0), 0)} pares
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-2">
+                        {['33', '34', '35', '36', '37', '38', '39', '40', '41', '42', '43', '44'].map(sz => {
+                          const currentQty = newSessionForm.sizes[sz] || 0;
+                          return (
+                            <div key={sz} className={`p-3 rounded-2xl border text-center transition-all ${currentQty > 0 ? 'bg-blue-50/50 border-brand-blue' : 'bg-brand-slate border-gray-200'}`}>
+                              <span className="text-xs font-black text-brand-dark uppercase block mb-1">Tam {sz}</span>
+                              <div className="flex items-center justify-center gap-1">
+                                <button 
+                                  onClick={() => {
+                                    const newQty = Math.max(0, currentQty - 1);
+                                    const updated = { ...newSessionForm.sizes, [sz]: newQty };
+                                    setNewSessionForm({ ...newSessionForm, sizes: updated });
+                                  }}
+                                  className="w-7 h-7 rounded-lg bg-white border border-gray-200 text-brand-dark font-bold text-xs flex items-center justify-center hover:bg-gray-100"
+                                >
+                                  -
+                                </button>
+                                <span className="font-mono font-black text-sm text-brand-blue min-w-[20px]">{currentQty}</span>
+                                <button 
+                                  onClick={() => {
+                                    const updated = { ...newSessionForm.sizes, [sz]: currentQty + 1 };
+                                    setNewSessionForm({ ...newSessionForm, sizes: updated });
+                                  }}
+                                  className="w-7 h-7 rounded-lg bg-brand-blue text-white font-bold text-xs flex items-center justify-center hover:brightness-110"
+                                >
+                                  +
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* ACTION BUTTONS */}
+                    <div className="flex gap-3 pt-4">
+                      <button 
+                        onClick={() => setNewCountStep(1)}
+                        className="px-5 py-4 bg-gray-100 hover:bg-gray-200 text-brand-dark font-black text-xs uppercase tracking-wider rounded-xl transition-all"
+                      >
+                        Voltar ao Leitor
+                      </button>
+                      <button 
+                        onClick={handleConfirmAndStartSession}
+                        className="flex-1 py-4 bg-brand-blue hover:brightness-110 text-white font-black text-xs uppercase tracking-wider rounded-xl shadow-lg shadow-brand-blue/20 transition-all flex items-center justify-center gap-2 active:scale-95"
+                      >
+                        <CheckCircle2 size={18} />
+                        Confirmar Dados e Iniciar Contagem
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </motion.div>
+            )}
+
             {/* Search Brand input */}
             <div className="relative group">
               <Search className="absolute left-6 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-brand-blue transition-colors" size={20} />
@@ -1044,7 +1657,15 @@ export const ShoeInventoryManager: React.FC<ShoeInventoryManagerProps> = ({ curr
               </div>
 
               <button 
-                onClick={() => setIsStartingNewSession(true)}
+                onClick={() => {
+                  setIsStartingNewSession(true);
+                  setNewCountStep(1);
+                  setNewCountBarcode('');
+                  setNewSessionForm({
+                    ...newSessionForm,
+                    brand: selectedBrandName
+                  });
+                }}
                 className="px-5 py-3 bg-brand-blue text-white font-black uppercase text-[10px] tracking-widest rounded-xl hover:brightness-110 shadow-md shadow-brand-blue/15 transition-all flex items-center gap-1.5 active:scale-95"
               >
                 <Plus size={14} strokeWidth={3} />
@@ -1052,47 +1673,293 @@ export const ShoeInventoryManager: React.FC<ShoeInventoryManagerProps> = ({ curr
               </button>
             </div>
 
-            {/* START COUNTING DIALOG */}
+            {/* 2-STEP NEW COUNT WIZARD INSIDE BRAND VIEW */}
             {isStartingNewSession && (
-              <div className="p-6 bg-brand-slate rounded-[2.5rem] border border-gray-100 space-y-4">
-                <div className="flex justify-between items-center">
-                  <h4 className="font-display font-black text-brand-dark uppercase text-xs tracking-wider">Configurar Nova Contagem</h4>
-                  <button onClick={() => setIsStartingNewSession(false)} className="text-gray-400 hover:text-brand-dark">
-                    <X size={16} />
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.98 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="p-6 bg-white rounded-[2.5rem] border-2 border-brand-blue/30 shadow-xl space-y-6"
+              >
+                {/* Wizard Header */}
+                <div className="flex justify-between items-center pb-4 border-b border-gray-100">
+                  <div className="space-y-1">
+                    <span className="text-[9px] font-black text-brand-blue uppercase tracking-widest bg-brand-blue/10 px-3 py-1 rounded-full inline-block">
+                      NOVA CONTAGEM PARA MARCA: {selectedBrandName}
+                    </span>
+                    <h4 className="font-display font-black text-xl text-brand-dark uppercase">
+                      {newCountStep === 1 
+                        ? 'Passo 1 de 2: Leitura do Código de Barras' 
+                        : 'Passo 2 de 2: Confirmar Dados e Tamanhos'}
+                    </h4>
+                  </div>
+                  <button 
+                    onClick={() => {
+                      setIsStartingNewSession(false);
+                      stopNewCountCamera();
+                    }} 
+                    className="w-10 h-10 rounded-full bg-brand-slate text-gray-400 hover:text-brand-dark hover:bg-gray-200 flex items-center justify-center transition-all"
+                  >
+                    <X size={20} />
                   </button>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-[9px] font-black text-gray-400 uppercase tracking-wider block mb-1.5 ml-1">Responsável / Conferente</label>
-                    <input 
-                      type="text"
-                      placeholder="Nome do operador"
-                      className="w-full px-4 py-3 bg-white rounded-xl border border-gray-100 focus:outline-none font-bold text-sm text-brand-dark shadow-sm"
-                      value={newSessionForm.employee}
-                      onChange={e => setNewSessionForm({ ...newSessionForm, employee: e.target.value })}
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[9px] font-black text-gray-400 uppercase tracking-wider block mb-1.5 ml-1">Observações do lote</label>
-                    <input 
-                      type="text"
-                      placeholder="Ex: Lote vindo da prateleira central"
-                      className="w-full px-4 py-3 bg-white rounded-xl border border-gray-100 focus:outline-none font-bold text-sm text-brand-dark shadow-sm"
-                      value={newSessionForm.observations}
-                      onChange={e => setNewSessionForm({ ...newSessionForm, observations: e.target.value })}
-                    />
-                  </div>
-                </div>
+                {/* STEP 1: BARCODE SCANNER / TYPING */}
+                {newCountStep === 1 && (
+                  <div className="space-y-5">
+                    <div className="p-4 bg-brand-slate rounded-2xl border border-gray-100 text-center">
+                      <p className="text-xs text-brand-dark font-bold uppercase tracking-wide">
+                        Bipe o código de barras da caixa com o leitor USB/Bluetooth ou use a câmera do celular
+                      </p>
+                      <p className="text-[10px] text-gray-400 font-medium mt-1">
+                        Ao ler, o sistema abrirá o formulário com marca, modelo, cor, datas e tamanhos.
+                      </p>
+                    </div>
 
-                <button 
-                  onClick={handleStartCountSession}
-                  className="w-full py-4 bg-brand-blue hover:brightness-110 text-white font-black uppercase text-[10px] tracking-widest rounded-xl transition-all shadow-md flex items-center justify-center gap-1.5"
-                >
-                  <CheckCircle2 size={14} />
-                  Confirmar e Ir para o Leitor
-                </button>
-              </div>
+                    {isNewCountCameraActive ? (
+                      <div className="space-y-3">
+                        <div id="new-count-camera-reader" className="w-full max-w-sm mx-auto overflow-hidden rounded-2xl border-2 border-brand-blue shadow-md"></div>
+                        <button 
+                          onClick={stopNewCountCamera}
+                          className="w-full py-3 bg-red-100 hover:bg-red-200 text-red-600 font-black text-xs uppercase rounded-xl transition-all"
+                        >
+                          Fechar Câmera
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col sm:flex-row gap-3">
+                        <div className="relative flex-1">
+                          <input 
+                            ref={newCountBarcodeRef}
+                            type="text"
+                            placeholder="Passe o leitor ou digite o código de barras..."
+                            value={newCountBarcode}
+                            onChange={e => setNewCountBarcode(e.target.value)}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                handleStep1BarcodeSubmit();
+                              }
+                            }}
+                            className="w-full px-6 py-4 bg-brand-slate rounded-2xl border border-gray-200 font-mono text-lg font-bold text-center text-brand-dark focus:border-brand-blue focus:ring-4 focus:ring-brand-blue/10 focus:outline-none transition-all placeholder:text-gray-300 placeholder:text-sm placeholder:font-sans"
+                            autoFocus
+                          />
+                        </div>
+                        <button 
+                          onClick={() => handleStep1BarcodeSubmit()}
+                          className="px-6 py-4 bg-brand-blue text-white font-black text-xs uppercase tracking-wider rounded-2xl hover:brightness-110 flex items-center justify-center gap-2 shadow-md shadow-brand-blue/20 transition-all active:scale-95"
+                        >
+                          <Barcode size={18} />
+                          Bipar / Continuar
+                        </button>
+                        <button 
+                          onClick={startNewCountCamera}
+                          className="px-5 py-4 bg-gray-100 text-brand-dark hover:bg-brand-blue hover:text-white font-black text-xs uppercase tracking-wider rounded-2xl flex items-center justify-center gap-2 transition-all active:scale-95"
+                        >
+                          <Camera size={18} />
+                          Usar Câmera
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* STEP 2: MARCA, MODELO, COR, DATAS/MESES E TAMANHOS */}
+                {newCountStep === 2 && (
+                  <div className="space-y-6">
+                    <div className="flex items-center justify-between p-4 rounded-2xl bg-brand-slate border border-gray-100 flex-wrap gap-2">
+                      <div className="flex items-center gap-3">
+                        <div className="w-9 h-9 rounded-xl bg-brand-blue/10 text-brand-blue flex items-center justify-center font-bold">
+                          <Barcode size={18} />
+                        </div>
+                        <div>
+                          <span className="text-[8px] font-black text-gray-400 uppercase tracking-widest block">Código Lido</span>
+                          <span className="font-mono text-base font-black text-brand-dark">{newSessionForm.barcode}</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className={`text-[9px] font-black uppercase px-3 py-1 rounded-full ${newCountProductFound ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>
+                          {newCountProductFound ? '✓ Produto Localizado' : '+ Novo Cadastro'}
+                        </span>
+                        <button 
+                          onClick={() => setNewCountStep(1)} 
+                          className="text-xs text-brand-blue font-black uppercase hover:underline ml-2"
+                        >
+                          Trocar Código
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                      {/* Marca */}
+                      <div>
+                        <label className="text-[10px] font-black text-gray-400 uppercase block mb-1">Marca do Calçado</label>
+                        <select 
+                          value={newSessionForm.brand}
+                          onChange={e => setNewSessionForm({ ...newSessionForm, brand: e.target.value })}
+                          className="w-full px-4 py-3 bg-brand-slate rounded-xl border border-gray-200 font-bold text-sm text-brand-dark focus:outline-none"
+                        >
+                          {brands.map(b => (
+                            <option key={b.id} value={b.name}>{b.name}</option>
+                          ))}
+                          <option value="Outras Marcas">Outras Marcas</option>
+                        </select>
+                      </div>
+
+                      {/* Modelo */}
+                      <div>
+                        <label className="text-[10px] font-black text-gray-400 uppercase block mb-1">Modelo do Calçado</label>
+                        <input 
+                          type="text"
+                          placeholder="Ex: Sapatilha Soft Flex"
+                          value={newSessionForm.model}
+                          onChange={e => setNewSessionForm({ ...newSessionForm, model: e.target.value })}
+                          className="w-full px-4 py-3 bg-brand-slate rounded-xl border border-gray-200 font-bold text-sm text-brand-dark focus:outline-none"
+                        />
+                      </div>
+
+                      {/* Cor */}
+                      <div>
+                        <label className="text-[10px] font-black text-gray-400 uppercase block mb-1">Cor / Acabamento</label>
+                        <input 
+                          type="text"
+                          placeholder="Ex: Preto Nobuck / Nude"
+                          value={newSessionForm.color}
+                          onChange={e => setNewSessionForm({ ...newSessionForm, color: e.target.value })}
+                          className="w-full px-4 py-3 bg-brand-slate rounded-xl border border-gray-200 font-bold text-sm text-brand-dark focus:outline-none"
+                        />
+                      </div>
+
+                      {/* Categoria */}
+                      <div>
+                        <label className="text-[10px] font-black text-gray-400 uppercase block mb-1">Categoria / Tipo</label>
+                        <select 
+                          value={newSessionForm.category}
+                          onChange={e => setNewSessionForm({ ...newSessionForm, category: e.target.value })}
+                          className="w-full px-4 py-3 bg-brand-slate rounded-xl border border-gray-200 font-bold text-sm text-brand-dark focus:outline-none"
+                        >
+                          {PRODUCT_TYPES.map(cat => (
+                            <option key={cat} value={cat}>{cat}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Mês de Chegada (Datas e Meses) */}
+                      <div>
+                        <label className="text-[10px] font-black text-gray-400 uppercase block mb-1">Mês de Chegada</label>
+                        <select 
+                          value={newSessionForm.arrivalMonth}
+                          onChange={e => setNewSessionForm({ ...newSessionForm, arrivalMonth: e.target.value })}
+                          className="w-full px-4 py-3 bg-brand-slate rounded-xl border border-gray-200 font-bold text-sm text-brand-dark focus:outline-none"
+                        >
+                          {MONTHS.map(m => (
+                            <option key={m} value={m}>Mês {m}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Ano de Chegada (Datas e Meses) */}
+                      <div>
+                        <label className="text-[10px] font-black text-gray-400 uppercase block mb-1">Ano de Chegada</label>
+                        <select 
+                          value={newSessionForm.arrivalYear}
+                          onChange={e => setNewSessionForm({ ...newSessionForm, arrivalYear: e.target.value })}
+                          className="w-full px-4 py-3 bg-brand-slate rounded-xl border border-gray-200 font-bold text-sm text-brand-dark focus:outline-none"
+                        >
+                          {YEARS.map(y => (
+                            <option key={y} value={y}>{y}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Responsável */}
+                      <div>
+                        <label className="text-[10px] font-black text-gray-400 uppercase block mb-1">Responsável / Conferente</label>
+                        <input 
+                          type="text"
+                          placeholder="Nome do operador"
+                          value={newSessionForm.employee}
+                          onChange={e => setNewSessionForm({ ...newSessionForm, employee: e.target.value })}
+                          className="w-full px-4 py-3 bg-brand-slate rounded-xl border border-gray-200 font-bold text-sm text-brand-dark focus:outline-none"
+                        />
+                      </div>
+
+                      {/* Observações */}
+                      <div className="sm:col-span-2">
+                        <label className="text-[10px] font-black text-gray-400 uppercase block mb-1">Observações do Lote</label>
+                        <input 
+                          type="text"
+                          placeholder="Ex: Lote da prateleira central (opcional)"
+                          value={newSessionForm.observations}
+                          onChange={e => setNewSessionForm({ ...newSessionForm, observations: e.target.value })}
+                          className="w-full px-4 py-3 bg-brand-slate rounded-xl border border-gray-200 font-bold text-sm text-brand-dark focus:outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    {/* TAMANHOS / NUMERAÇÕES E QUANTIDADES */}
+                    <div className="space-y-3 pt-3 border-t border-gray-100">
+                      <div className="flex justify-between items-center">
+                        <label className="text-xs font-black text-brand-dark uppercase tracking-wider">
+                          Grade de Tamanhos / Numerações Encontradas
+                        </label>
+                        <span className="text-[10px] font-black text-brand-blue uppercase bg-brand-blue/10 px-3 py-1 rounded-full">
+                          Total: {Object.values(newSessionForm.sizes).reduce((a, b) => a + (b || 0), 0)} pares
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-2">
+                        {['33', '34', '35', '36', '37', '38', '39', '40', '41', '42', '43', '44'].map(sz => {
+                          const currentQty = newSessionForm.sizes[sz] || 0;
+                          return (
+                            <div key={sz} className={`p-3 rounded-2xl border text-center transition-all ${currentQty > 0 ? 'bg-blue-50/50 border-brand-blue' : 'bg-brand-slate border-gray-200'}`}>
+                              <span className="text-xs font-black text-brand-dark uppercase block mb-1">Tam {sz}</span>
+                              <div className="flex items-center justify-center gap-1">
+                                <button 
+                                  onClick={() => {
+                                    const newQty = Math.max(0, currentQty - 1);
+                                    const updated = { ...newSessionForm.sizes, [sz]: newQty };
+                                    setNewSessionForm({ ...newSessionForm, sizes: updated });
+                                  }}
+                                  className="w-7 h-7 rounded-lg bg-white border border-gray-200 text-brand-dark font-bold text-xs flex items-center justify-center hover:bg-gray-100"
+                                >
+                                  -
+                                </button>
+                                <span className="font-mono font-black text-sm text-brand-blue min-w-[20px]">{currentQty}</span>
+                                <button 
+                                  onClick={() => {
+                                    const updated = { ...newSessionForm.sizes, [sz]: currentQty + 1 };
+                                    setNewSessionForm({ ...newSessionForm, sizes: updated });
+                                  }}
+                                  className="w-7 h-7 rounded-lg bg-brand-blue text-white font-bold text-xs flex items-center justify-center hover:brightness-110"
+                                >
+                                  +
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* ACTION BUTTONS */}
+                    <div className="flex gap-3 pt-4">
+                      <button 
+                        onClick={() => setNewCountStep(1)}
+                        className="px-5 py-4 bg-gray-100 hover:bg-gray-200 text-brand-dark font-black text-xs uppercase tracking-wider rounded-xl transition-all"
+                      >
+                        Voltar ao Leitor
+                      </button>
+                      <button 
+                        onClick={handleConfirmAndStartSession}
+                        className="flex-1 py-4 bg-brand-blue hover:brightness-110 text-white font-black text-xs uppercase tracking-wider rounded-xl shadow-lg shadow-brand-blue/20 transition-all flex items-center justify-center gap-2 active:scale-95"
+                      >
+                        <CheckCircle2 size={18} />
+                        Confirmar Dados e Iniciar Contagem
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </motion.div>
             )}
 
             {/* Past counts list for this brand */}
@@ -1603,6 +2470,17 @@ export const ShoeInventoryManager: React.FC<ShoeInventoryManagerProps> = ({ curr
               </div>
 
               <div className="space-y-4">
+                <div>
+                  <label className="text-[9px] font-black text-gray-400 uppercase block mb-1">Código de Barras *</label>
+                  <input 
+                    type="text"
+                    placeholder="Código de barras"
+                    className="w-full px-4 py-3 bg-brand-slate rounded-xl border border-gray-100 font-bold font-mono text-xs text-brand-dark focus:ring-2 focus:ring-brand-blue outline-none"
+                    value={missingBarcode}
+                    onChange={e => setMissingBarcode(e.target.value)}
+                  />
+                </div>
+
                 <div>
                   <label className="text-[9px] font-black text-gray-400 uppercase block mb-1">Marca *</label>
                   <select 

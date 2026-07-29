@@ -81,3 +81,81 @@ export const MONTHS = [
 ];
 
 export const YEARS = Array.from({ length: 2030 - 2019 + 1 }, (_, i) => (2019 + i).toString());
+
+export const getGenderFromProductType = (productType?: string, currentGender?: string): string => {
+  if (!productType) return currentGender || 'M';
+  const lower = productType.toLowerCase();
+  if (lower.includes('infantil') && (lower.includes('masculin') || lower.includes('menino'))) return 'IM';
+  if (lower.includes('infantil') && (lower.includes('feminin') || lower.includes('menina'))) return 'IF';
+  if (lower.includes('masculin') || lower.includes('homem') || lower.includes('cueca') || lower.includes('sapatênis masculino')) return 'M';
+  if (lower.includes('feminin') || lower.includes('mulher') || lower.includes('lingerie') || lower.includes('tamanco') || lower.includes('rasteirinha') || lower.includes('sapatilha')) return 'F';
+  return currentGender || 'M';
+};
+
+export const getDefaultProductTypeFromGender = (gender?: string, currentProductType?: string): string => {
+  if (currentProductType && currentProductType !== 'Calçado Feminino' && currentProductType !== 'Calçado') {
+    if (getGenderFromProductType(currentProductType) === gender) {
+      return currentProductType;
+    }
+  }
+  switch (gender) {
+    case 'M':
+      return 'Tênis Adulto Masculino';
+    case 'IM':
+      return 'Tênis Infantil Masculino';
+    case 'IF':
+      return 'Tênis Infantil Feminino';
+    case 'F':
+      return 'Tênis Adulto Feminino';
+    default:
+      return 'Tênis Adulto Masculino';
+  }
+};
+
+export const syncProductTypeWithGender = (currentProductType: string | undefined, newGender: string): string => {
+  if (!newGender) return currentProductType || 'Tênis Adulto Masculino';
+  if (!currentProductType || currentProductType === 'Calçado' || currentProductType === 'Calçado Feminino') {
+    return getDefaultProductTypeFromGender(newGender);
+  }
+
+  // If already aligned with new gender, return currentProductType
+  if (getGenderFromProductType(currentProductType) === newGender) {
+    return currentProductType;
+  }
+
+  // Convert string to match new gender
+  let updated = currentProductType;
+  if (newGender === 'F') {
+    updated = updated
+      .replace(/Masculino/gi, 'Feminino')
+      .replace(/Masculina/gi, 'Feminina')
+      .replace(/Masculinas/gi, 'Femininas')
+      .replace(/Masculinos/gi, 'Femininos');
+  } else if (newGender === 'M') {
+    updated = updated
+      .replace(/Feminino/gi, 'Masculino')
+      .replace(/Feminina/gi, 'Masculina')
+      .replace(/Femininas/gi, 'Masculinas')
+      .replace(/Femininos/gi, 'Masculinos');
+  } else if (newGender === 'IM') {
+    updated = updated
+      .replace(/Adulto/gi, 'Infantil')
+      .replace(/Feminino/gi, 'Masculino')
+      .replace(/Feminina/gi, 'Masculina')
+      .replace(/Femininas/gi, 'Masculinas')
+      .replace(/Femininos/gi, 'Masculinos');
+  } else if (newGender === 'IF') {
+    updated = updated
+      .replace(/Adulto/gi, 'Infantil')
+      .replace(/Masculino/gi, 'Feminino')
+      .replace(/Masculina/gi, 'Feminina')
+      .replace(/Femininas/gi, 'Masculinas')
+      .replace(/Masculinos/gi, 'Femininos');
+  }
+
+  if (PRODUCT_TYPES.includes(updated)) {
+    return updated;
+  }
+
+  return getDefaultProductTypeFromGender(newGender);
+};

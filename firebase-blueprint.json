@@ -1,24 +1,71 @@
 {
   "entities": {
-    "InventoryCount": {
-      "title": "Registro de Contagem de Estoque",
-      "description": "Dados detalhados de uma contagem de produto no estoque.",
+    "ShoeProduct": {
+      "title": "Cadastro do Produto",
+      "description": "Base permanente de dados do catálogo de produtos (sem saldo volátil de sessão).",
+      "type": "object",
+      "properties": {
+        "barcode": { "type": "string" },
+        "brand": { "type": "string" },
+        "model": { "type": "string" },
+        "category": { "type": "string" },
+        "color": { "type": "string" },
+        "size": { "type": "string" },
+        "gender": { "type": "string" },
+        "expectedQty": { "type": "number" },
+        "createdAt": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["barcode", "brand", "model"]
+    },
+    "ShoeInventory": {
+      "title": "Sessão de Inventário Físico",
+      "description": "Sessão isolada para contagem física de estoque.",
       "type": "object",
       "properties": {
         "id": { "type": "string" },
-        "productType": { "type": "string" },
-        "model": { "type": "string" },
-        "brand": { "type": "string" },
-        "color": { "type": "string" },
-        "arrivalMonth": { "type": "string" },
-        "arrivalYear": { "type": "string" },
-        "gridType": { "type": "string", "enum": ["LETTER", "NUMERIC"] },
-        "sizes": { "type": "object" },
-        "total": { "type": "number" },
-        "createdAt": { "type": "number" },
-        "userId": { "type": "string" }
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "date": { "type": "string" },
+        "time": { "type": "string" },
+        "employee": { "type": "string" },
+        "observations": { "type": "string" },
+        "status": { "type": "string", "enum": ["NOT_STARTED", "IN_PROGRESS", "FINISHED", "CANCELLED"] },
+        "counts": { "type": "object" },
+        "createdAt": { "type": "number" }
       },
-      "required": ["productType", "model", "gridType", "sizes", "total", "createdAt", "userId"]
+      "required": ["id", "name", "status", "createdAt"]
+    },
+    "InventoryItemScan": {
+      "title": "Item Bipado no Inventário",
+      "description": "Registro individual de leitura de código de barras durante inventário.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "inventoryId": { "type": "string" },
+        "barcode": { "type": "string" },
+        "qty": { "type": "number" },
+        "scannedBy": { "type": "string" },
+        "scannedAt": { "type": "number" },
+        "scanMethod": { "type": "string", "enum": ["USB_SCANNER", "CAMERA", "MANUAL"] }
+      },
+      "required": ["id", "inventoryId", "barcode", "qty", "scannedAt"]
+    },
+    "AuditLog": {
+      "title": "Histórico e Auditoria",
+      "description": "Registro cronológico imutável de ações executadas no sistema.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "timestamp": { "type": "number" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "action": { "type": "string" },
+        "module": { "type": "string" },
+        "details": { "type": "string" },
+        "metadata": { "type": "object" }
+      },
+      "required": ["id", "timestamp", "action", "module"]
     },
     "User": {
       "title": "Usuário",
@@ -35,9 +82,21 @@
     }
   },
   "firestore": {
-    "/inventory/{countId}": {
-      "schema": "InventoryCount",
-      "description": "Coleção global de contagens de estoque."
+    "/products/{barcode}": {
+      "schema": "ShoeProduct",
+      "description": "Cadastro de produtos permanente."
+    },
+    "/inventories/{inventoryId}": {
+      "schema": "ShoeInventory",
+      "description": "Sessões de inventário físico."
+    },
+    "/inventory_scans/{scanId}": {
+      "schema": "InventoryItemScan",
+      "description": "Bipagens individuais por inventário."
+    },
+    "/audit_logs/{logId}": {
+      "schema": "AuditLog",
+      "description": "Log de auditoria do sistema."
     },
     "/users/{userId}": {
       "schema": "User",

@@ -1,7 +1,8 @@
-import { initializeApp } from 'firebase/app';
+import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, User } from 'firebase/auth';
 import { 
   initializeFirestore, 
+  getFirestore,
   persistentLocalCache, 
   persistentMultipleTabManager,
   collection, 
@@ -21,12 +22,22 @@ import {
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
-const app = initializeApp(firebaseConfig);
-export const db = initializeFirestore(app, {
-  localCache: persistentLocalCache({
-    tabManager: persistentMultipleTabManager()
-  })
-}, (firebaseConfig as any).firestoreDatabaseId);
+const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
+
+const firestoreDbId = (firebaseConfig as any).firestoreDatabaseId;
+
+let dbInstance;
+try {
+  dbInstance = initializeFirestore(app, {
+    localCache: persistentLocalCache({
+      tabManager: persistentMultipleTabManager()
+    })
+  }, firestoreDbId);
+} catch (e) {
+  dbInstance = firestoreDbId ? getFirestore(app, firestoreDbId) : getFirestore(app);
+}
+
+export const db = dbInstance;
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 
