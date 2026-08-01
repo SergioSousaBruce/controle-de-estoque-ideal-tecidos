@@ -34,7 +34,8 @@ import {
   ArrowRight,
   Lock,
   Unlock,
-  RotateCcw
+  RotateCcw,
+  ArrowUpDown
 } from 'lucide-react';
 import { OfflineSyncBadge } from './src/components/OfflineSyncBadge';
 import { queueOfflineCount } from './src/services/offlineSyncService';
@@ -125,8 +126,27 @@ const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<AppView>(AppView.HOME);
   const [viewingPdfItem, setViewingPdfItem] = useState<InventoryCount | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const [historySort, setHistorySort] = useState<'AZ' | 'DATE'>('AZ');
 
   // Clean Architecture Module States
+  // Delete Brand and Edit Brand Modal States
+  const [deleteBrandModal, setDeleteBrandModal] = useState<{
+    isOpen: boolean;
+    brandName: string;
+    count: number;
+    pieces: number;
+  }>({ isOpen: false, brandName: '', count: 0, pieces: 0 });
+
+  const [brandEditModal, setBrandEditModal] = useState<{
+    isOpen: boolean;
+    brandName: string;
+  }>({ isOpen: false, brandName: '' });
+
+  const [viewingBrandPreview, setViewingBrandPreview] = useState<{
+    brandName: string;
+    items: InventoryCount[];
+  } | null>(null);
+
   const [deleteModal, setDeleteModal] = useState<{ isOpen: boolean; id: string | 'ALL' }>({
     isOpen: false,
     id: ''
@@ -782,6 +802,63 @@ const App: React.FC = () => {
     }
   };
 
+  const handleDeleteBrand = (brandName: string, count: number, pieces: number) => {
+    setDeleteBrandModal({ isOpen: true, brandName, count, pieces });
+  };
+
+  const confirmDeleteBrand = async () => {
+    const brandToDelete = deleteBrandModal.brandName;
+    if (!brandToDelete) return;
+
+    const previousCounts = [...counts];
+    setDeleteBrandModal({ isOpen: false, brandName: '', count: 0, pieces: 0 });
+
+    // Optimistic update
+    setCounts(prev => prev.filter(c => (c.brand || '').toLowerCase().trim() !== brandToDelete.toLowerCase().trim()));
+
+    try {
+      // Delete from Firestore
+      const q = query(collection(db, 'inventory'), where('brand', '==', brandToDelete));
+      const snapshot = await getDocs(q);
+      if (!snapshot.empty) {
+        const batch = writeBatch(db);
+        snapshot.docs.forEach(docSnap => batch.delete(docSnap.ref));
+        await batch.commit();
+      }
+
+      // Clear completed status
+      const updatedStatuses = { ...completedBrands };
+      delete updatedStatuses[brandToDelete];
+      setCompletedBrands(updatedStatuses);
+      const sharedDocRef = doc(db, 'shared_settings', 'brand_statuses');
+      await setDoc(sharedDocRef, { completed: updatedStatuses, updatedAt: Date.now() }, { merge: true }).catch(() => {});
+
+      showToast(`Marca "${brandToDelete}" e todos os seus lotes foram excluídos!`, 'success');
+    } catch (err) {
+      console.error("Error deleting brand:", err);
+      setCounts(previousCounts);
+      showToast('Erro ao excluir a marca do banco de dados.', 'error');
+    }
+  };
+
+  const handleUpdateItemQuantity = async (itemId: string, newTotal: number) => {
+    if (newTotal < 0) return;
+    const targetItem = counts.find(c => c.id === itemId);
+    if (!targetItem) return;
+
+    const updatedItem = { ...targetItem, total: newTotal };
+    setCounts(prev => prev.map(c => c.id === itemId ? updatedItem : c));
+
+    try {
+      const itemRef = doc(db, 'inventory', itemId);
+      await updateDoc(itemRef, { total: newTotal, updatedAt: Date.now() });
+      showToast('Quantidade atualizada com sucesso!', 'success');
+    } catch (err) {
+      console.error("Error updating item quantity:", err);
+      showToast('Erro ao atualizar quantidade no servidor.', 'error');
+    }
+  };
+
   const handleAddCustomSize = () => {
     const size = newSizeInput.trim().toUpperCase();
     if (!size) return;
@@ -1376,8 +1453,24 @@ const App: React.FC = () => {
       }
     }
 
+    if (historySort === 'AZ') {
+      uniqueList.sort((a, b) => {
+        const brandA = (a.brand || '').toLowerCase().trim();
+        const brandB = (b.brand || '').toLowerCase().trim();
+        const brandComp = brandA.localeCompare(brandB, 'pt-BR');
+        if (brandComp !== 0) return brandComp;
+        const modelA = (a.model || '').toLowerCase().trim();
+        const modelB = (b.model || '').toLowerCase().trim();
+        return modelA.localeCompare(modelB, 'pt-BR');
+      });
+    } else {
+      uniqueList.sort((a, b) => {
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      });
+    }
+
     return uniqueList;
-  }, [counts, searchTerm]);
+  }, [counts, searchTerm, historySort]);
 
   // Brand size turnover analysis
   const brandAnalysis = useMemo(() => {
@@ -1700,22 +1793,56 @@ const App: React.FC = () => {
               </div>
 
               <div className="space-y-6">
-                <div className="flex items-center justify-between px-3">
+                <div className="flex items-center justify-between px-3 flex-wrap gap-2">
                   <div className="flex items-center gap-2">
                     <div className="bg-brand-dark/5 p-2 rounded-lg text-brand-dark/30">
                       <History size={14} strokeWidth={3} />
                     </div>
-                    <h2 className="text-brand-dark font-black text-xs uppercase tracking-[0.2em] opacity-40">Histórico Recente</h2>
+                    <div>
+                      <h2 className="text-brand-dark font-black text-xs uppercase tracking-[0.2em] opacity-40">Histórico de Contagens</h2>
+                    </div>
                   </div>
-                  {counts.length > 0 && (
-                    <button 
-                      onClick={() => handleDelete('ALL')}
-                      className="flex items-center gap-1.5 py-2 px-4 rounded-full bg-red-50 text-red-500 hover:bg-brand-red hover:text-white transition-all text-[9px] font-black uppercase tracking-widest shadow-sm"
-                    >
-                      <Trash2 size={12} />
-                      Limpar Tudo
-                    </button>
-                  )}
+
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {/* Sort Selector */}
+                    <div className="flex items-center bg-gray-100/80 p-1 rounded-2xl border border-gray-200/80 text-[10px] font-black shadow-2xs">
+                      <button
+                        type="button"
+                        onClick={() => setHistorySort('AZ')}
+                        className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
+                          historySort === 'AZ' 
+                            ? 'bg-brand-dark text-white shadow-xs' 
+                            : 'text-gray-500 hover:text-brand-dark'
+                        }`}
+                        title="Organizar marcas em ordem alfabética (A-Z)"
+                      >
+                        <ArrowUpDown size={12} />
+                        Ordem Alfabética A-Z
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setHistorySort('DATE')}
+                        className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
+                          historySort === 'DATE' 
+                            ? 'bg-brand-dark text-white shadow-xs' 
+                            : 'text-gray-500 hover:text-brand-dark'
+                        }`}
+                        title="Organizar pelas contagens mais recentes"
+                      >
+                        Mais Recentes
+                      </button>
+                    </div>
+
+                    {counts.length > 0 && (
+                      <button 
+                        onClick={() => handleDelete('ALL')}
+                        className="flex items-center gap-1.5 py-2 px-3.5 rounded-2xl bg-red-50 text-red-500 hover:bg-brand-red hover:text-white transition-all text-[9px] font-black uppercase tracking-widest shadow-2xs"
+                      >
+                        <Trash2 size={12} />
+                        Limpar Tudo
+                      </button>
+                    )}
+                  </div>
                 </div>
 
               {filteredCounts.length === 0 ? (
@@ -2600,7 +2727,7 @@ const App: React.FC = () => {
                     return (
                       <div 
                         key={brand.name}
-                        className={`bg-white rounded-3xl p-5 border transition-all shadow-sm ${
+                        className={`bg-white rounded-3xl p-5 border transition-all shadow-sm space-y-4 ${
                           brand.status === 'COMPLETED' 
                             ? 'border-emerald-200/80 bg-gradient-to-r from-emerald-50/30 to-white' 
                             : brand.status === 'IN_PROGRESS'
@@ -2608,135 +2735,168 @@ const App: React.FC = () => {
                               : 'border-gray-100'
                         }`}
                       >
-                        <div className="flex items-center justify-between gap-3">
+                        {/* Header: Brand Name, Status Badge & Trash Delete Brand */}
+                        <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2 mb-1 flex-wrap">
-                              <h4 className="text-lg font-display font-black text-brand-dark uppercase tracking-tight">{brand.name}</h4>
+                            <div className="flex items-center gap-2 mb-1.5 flex-wrap">
+                              <h4 className="text-xl font-display font-black text-brand-dark uppercase tracking-tight truncate">
+                                {brand.name}
+                              </h4>
                               
                               {/* Status Badge */}
                               {brand.status === 'COMPLETED' && (
-                                <span className="px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-800 border border-emerald-200 flex items-center gap-1">
+                                <span className="px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-800 border border-emerald-200 flex items-center gap-1 shrink-0">
                                   <CheckCircle2 size={12} /> Concluída
                                 </span>
                               )}
                               {brand.status === 'IN_PROGRESS' && (
-                                <span className="px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider bg-blue-100 text-blue-800 border border-blue-200 flex items-center gap-1">
+                                <span className="px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider bg-blue-100 text-blue-800 border border-blue-200 flex items-center gap-1 shrink-0">
                                   ⏳ Em Contagem ({brand.totalPieces} pcs)
                                 </span>
                               )}
                               {brand.status === 'PENDING' && (
-                                <span className="px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider bg-gray-100 text-gray-500 border border-gray-200">
+                                <span className="px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider bg-gray-100 text-gray-500 border border-gray-200 shrink-0">
                                   ⚪ Pendente
                                 </span>
                               )}
                             </div>
 
-                            <div className="flex items-center gap-4 text-xs font-bold text-gray-500">
-                              <span><strong className="text-brand-dark">{brand.totalPieces}</strong> peças total</span>
-                              <span>•</span>
-                              <span><strong className="text-brand-dark">{brand.totalModels}</strong> modelos</span>
-                              <span>•</span>
-                              <span><strong className="text-brand-dark">{brand.totalLots}</strong> lotes</span>
+                            {/* Stats Pills (No vertical line wrapping) */}
+                            <div className="flex items-center gap-2 text-xs font-bold text-gray-600 flex-wrap pt-0.5">
+                              <span className="bg-gray-100/90 text-brand-dark px-3 py-1 rounded-xl whitespace-nowrap border border-gray-200/50">
+                                <strong className="text-brand-blue font-black">{brand.totalPieces}</strong> peças total
+                              </span>
+                              <span className="bg-gray-100/90 text-brand-dark px-3 py-1 rounded-xl whitespace-nowrap border border-gray-200/50">
+                                <strong className="text-brand-blue font-black">{brand.totalModels}</strong> modelos
+                              </span>
+                              <span className="bg-gray-100/90 text-brand-dark px-3 py-1 rounded-xl whitespace-nowrap border border-gray-200/50">
+                                <strong className="text-brand-blue font-black">{brand.totalLots}</strong> lotes
+                              </span>
                             </div>
                           </div>
 
-                          {/* Quick Action Buttons */}
-                          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 flex-wrap justify-end">
-                            {/* Pré-Visualização */}
-                            {brand.items.length > 0 && (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setExpandedBrand(brand.name);
-                                  setViewingPdfItem(brand.items[0]);
-                                }}
-                                title={`Pré-visualizar contagens de ${brand.name}`}
-                                className="p-3 bg-blue-50 hover:bg-blue-100 text-brand-blue rounded-2xl font-black text-xs flex items-center gap-1.5 border border-blue-200 shadow-sm active:scale-95 transition-all"
-                              >
-                                <Eye size={18} strokeWidth={2.5} />
-                                <span className="hidden sm:inline text-[10px] uppercase">
-                                  Pré-Visualizar
-                                </span>
-                              </button>
-                            )}
+                          {/* Top Right Quick Delete Icon */}
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteBrand(brand.name, brand.totalLots, brand.totalPieces)}
+                            title={`Excluir a marca ${brand.name}`}
+                            className="p-2.5 text-gray-400 hover:text-rose-600 hover:bg-rose-50 rounded-2xl active:scale-90 transition-all border border-transparent hover:border-rose-100 shrink-0"
+                          >
+                            <Trash2 size={20} strokeWidth={2.2} />
+                          </button>
+                        </div>
 
-                            {/* Baixar PDF da Marca */}
-                            {brand.items.length > 0 && (
-                              <button
-                                type="button"
-                                onClick={() => generateBrandPDF(brand.name, brand.items)}
-                                title={`Baixar PDF da marca ${brand.name}`}
-                                className="p-3 bg-red-50 hover:bg-red-100 text-brand-red rounded-2xl font-black text-xs flex items-center gap-1.5 border border-red-200 shadow-sm active:scale-95 transition-all"
-                              >
-                                <Download size={18} strokeWidth={2.5} />
-                                <span className="hidden sm:inline text-[10px] uppercase">
-                                  PDF
-                                </span>
-                              </button>
-                            )}
-
-                            {/* Toggle Concluded */}
+                        {/* Action Buttons Row */}
+                        <div className="flex items-center gap-2 flex-wrap pt-2 border-t border-gray-100">
+                          {/* Pré-Visualização / Contagem Geral */}
+                          {brand.items.length > 0 && (
                             <button
                               type="button"
-                              onClick={() => {
-                                toggleBrandCompleted(brand.name);
-                                showToast(
-                                  completedBrands[brand.name] 
-                                    ? `Marca ${brand.name} reaberta` 
-                                    : `Marca ${brand.name} concluída!`,
-                                  'success'
-                                );
-                              }}
-                              title={completedBrands[brand.name] ? 'Reabrir contagem' : 'Marcar como Concluída'}
-                              className={`p-3 rounded-2xl border font-black text-xs flex items-center gap-1.5 transition-all ${
-                                completedBrands[brand.name]
-                                  ? 'bg-emerald-600 text-white border-emerald-600 shadow-md'
-                                  : 'bg-gray-50 hover:bg-emerald-50 text-gray-500 hover:text-emerald-700 border-gray-200'
-                              }`}
+                              onClick={() => setViewingBrandPreview({ brandName: brand.name, items: brand.items })}
+                              title={`Pré-visualizar contagem geral da marca ${brand.name}`}
+                              className="p-2.5 px-3.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-2xl font-black text-xs flex items-center gap-1.5 border border-indigo-200 shadow-xs active:scale-95 transition-all"
                             >
-                              <CheckCircle2 size={18} strokeWidth={2.5} />
-                              <span className="hidden sm:inline text-[10px] uppercase">
-                                {completedBrands[brand.name] ? 'Concluída' : 'Concluir'}
+                              <Eye size={16} strokeWidth={2.5} />
+                              <span className="text-[10px] uppercase tracking-wider">
+                                Pré-Visualizar
                               </span>
                             </button>
+                          )}
 
-                            {/* Start/Continue Count */}
+                          {/* Editar / Atualizar Contagens */}
+                          <button
+                            type="button"
+                            onClick={() => setBrandEditModal({ isOpen: true, brandName: brand.name })}
+                            title={`Editar ou atualizar números da marca ${brand.name}`}
+                            className="p-2.5 px-3.5 bg-amber-50 hover:bg-amber-100 text-amber-800 rounded-2xl font-black text-xs flex items-center gap-1.5 border border-amber-200 shadow-xs active:scale-95 transition-all"
+                          >
+                            <Edit2 size={16} strokeWidth={2.5} />
+                            <span className="text-[10px] uppercase tracking-wider">
+                              Editar / Atualizar
+                            </span>
+                          </button>
+
+                          {/* Ver Lotes */}
+                          {brand.items.length > 0 && (
                             <button
                               type="button"
-                              onClick={() => handleStartWithSameBrand(brand.name)}
-                              className="p-3 bg-brand-blue hover:bg-brand-dark text-white rounded-2xl font-black text-xs flex items-center gap-1.5 shadow-md active:scale-95 transition-all"
-                              title={`Contar ${brand.name}`}
+                              onClick={() => setExpandedBrand(isExpanded ? null : brand.name)}
+                              title={`Ver lotes de ${brand.name}`}
+                              className="p-2.5 px-3.5 bg-blue-50 hover:bg-blue-100 text-brand-blue rounded-2xl font-black text-xs flex items-center gap-1.5 border border-blue-200 shadow-xs active:scale-95 transition-all"
                             >
-                              <Plus size={18} strokeWidth={3} />
-                              <span className="hidden sm:inline text-[10px] uppercase">Contar</span>
+                              <Eye size={16} strokeWidth={2.5} />
+                              <span className="text-[10px] uppercase tracking-wider">
+                                {isExpanded ? 'Ocultar Lotes' : 'Ver Lotes'}
+                              </span>
                             </button>
-                          </div>
+                          )}
+
+                          {/* Baixar PDF da Marca */}
+                          {brand.items.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => generateBrandPDF(brand.name, brand.items)}
+                              title={`Baixar PDF da marca ${brand.name}`}
+                              className="p-2.5 px-3.5 bg-red-50 hover:bg-red-100 text-brand-red rounded-2xl font-black text-xs flex items-center gap-1.5 border border-red-200 shadow-xs active:scale-95 transition-all"
+                            >
+                              <Download size={16} strokeWidth={2.5} />
+                              <span className="text-[10px] uppercase tracking-wider">
+                                PDF
+                              </span>
+                            </button>
+                          )}
+
+                          {/* Toggle Concluded */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              toggleBrandCompleted(brand.name);
+                              showToast(
+                                completedBrands[brand.name] 
+                                  ? `Marca ${brand.name} reaberta` 
+                                  : `Marca ${brand.name} concluída!`,
+                                'success'
+                              );
+                            }}
+                            title={completedBrands[brand.name] ? 'Reabrir contagem' : 'Marcar como Concluída'}
+                            className={`p-2.5 px-3.5 rounded-2xl border font-black text-xs flex items-center gap-1.5 transition-all ${
+                              completedBrands[brand.name]
+                                ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
+                                : 'bg-gray-50 hover:bg-emerald-50 text-gray-600 hover:text-emerald-700 border-gray-200'
+                            }`}
+                          >
+                            <CheckCircle2 size={16} strokeWidth={2.5} />
+                            <span className="text-[10px] uppercase tracking-wider">
+                              {completedBrands[brand.name] ? 'Concluída' : 'Concluir'}
+                            </span>
+                          </button>
+
+                          {/* Start/Continue Count */}
+                          <button
+                            type="button"
+                            onClick={() => handleStartWithSameBrand(brand.name)}
+                            className="p-2.5 px-3.5 bg-brand-blue hover:bg-brand-dark text-white rounded-2xl font-black text-xs flex items-center gap-1.5 shadow-md active:scale-95 transition-all ml-auto"
+                            title={`Contar ${brand.name}`}
+                          >
+                            <Plus size={16} strokeWidth={3} />
+                            <span className="text-[10px] uppercase tracking-wider">Contar</span>
+                          </button>
                         </div>
 
                         {/* Accordion toggle if items exist */}
                         {brand.items.length > 0 && (
-                          <div className="mt-3 pt-3 border-t border-gray-100 flex items-center justify-between">
+                          <div className="pt-2 border-t border-gray-100 flex items-center justify-between text-[10px] font-bold text-gray-400">
+                            <span>
+                              Último lançamento: {new Date(brand.items[0]?.createdAt || 0).toLocaleDateString('pt-BR')}
+                            </span>
                             <button
                               type="button"
-                              onClick={() => setExpandedBrand(isExpanded ? null : brand.name)}
-                              className="text-[10px] font-black text-brand-blue uppercase tracking-widest hover:underline flex items-center gap-1"
+                              onClick={() => handleDeleteBrand(brand.name, brand.totalLots, brand.totalPieces)}
+                              className="text-rose-500 hover:underline flex items-center gap-1 font-black uppercase text-[10px]"
                             >
-                              {isExpanded ? 'Ocultar Lotes' : `Ver ${brand.items.length} Lote(s) da Marca`}
+                              <Trash2 size={12} />
+                              Excluir Marca
                             </button>
-                            <div className="flex items-center gap-3">
-                              <button
-                                type="button"
-                                onClick={() => generateBrandPDF(brand.name, brand.items)}
-                                className="text-[10px] font-black text-brand-red uppercase tracking-wider hover:underline flex items-center gap-1"
-                                title="Baixar relatório em PDF desta marca"
-                              >
-                                <Download size={12} />
-                                PDF da Marca
-                              </button>
-                              <span className="text-[9px] font-bold text-gray-400">
-                                Último: {new Date(brand.items[0]?.createdAt || 0).toLocaleDateString('pt-BR')}
-                              </span>
-                            </div>
                           </div>
                         )}
 
@@ -2748,37 +2908,45 @@ const App: React.FC = () => {
                             className="mt-3 space-y-2 pt-2 border-t border-dashed border-gray-200"
                           >
                             {brand.items.map(item => (
-                              <div key={item.id} className="p-3 bg-brand-slate/60 rounded-2xl flex items-center justify-between text-xs font-bold text-brand-dark gap-2">
+                              <div key={item.id} className="p-3 bg-brand-slate/60 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between text-xs font-bold text-brand-dark gap-2 border border-gray-100">
                                 <div className="min-w-0 flex-1">
                                   <span className="block font-black text-sm uppercase truncate">{item.model}</span>
                                   <span className="text-[10px] text-gray-500 font-normal block truncate">
                                     Cor: {item.color || '-'} | Gênero: {item.gender || '-'} | Chegada: {item.arrivalMonth || '--'}/{item.arrivalYear || '--'}
                                   </span>
                                 </div>
-                                <div className="flex items-center gap-1.5 shrink-0">
-                                  <span className="px-3 py-1 bg-white rounded-xl text-brand-blue font-black text-sm shadow-sm border border-gray-100">
+                                <div className="flex items-center gap-1.5 shrink-0 justify-end flex-wrap">
+                                  <span className="px-3 py-1 bg-white rounded-xl text-brand-blue font-black text-sm shadow-xs border border-gray-100">
                                     {item.total} pcs
                                   </span>
                                   <button 
+                                    onClick={() => handleEdit(item)} 
+                                    className="px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-700 font-black text-[10px] uppercase rounded-xl flex items-center gap-1 border border-amber-200 active:scale-95 transition-all"
+                                    title="Editar este lote"
+                                  >
+                                    <Edit2 size={14} strokeWidth={2.5} />
+                                    <span>Editar</span>
+                                  </button>
+                                  <button 
                                     onClick={() => setViewingPdfItem(item)} 
-                                    className="p-2 text-brand-blue hover:bg-white rounded-xl active:scale-90 transition-all border border-transparent hover:border-gray-200 shadow-xs"
+                                    className="p-1.5 text-brand-blue hover:bg-white rounded-xl active:scale-90 transition-all border border-transparent hover:border-gray-200 shadow-xs"
                                     title="Pré-visualizar Comprovante / PDF"
                                   >
                                     <Eye size={16} strokeWidth={2.5} />
                                   </button>
                                   <button 
                                     onClick={() => generateSinglePDF(item)} 
-                                    className="p-2 text-brand-red hover:bg-white rounded-xl active:scale-90 transition-all border border-transparent hover:border-gray-200 shadow-xs"
+                                    className="p-1.5 text-brand-red hover:bg-white rounded-xl active:scale-90 transition-all border border-transparent hover:border-gray-200 shadow-xs"
                                     title="Baixar PDF do Lote"
                                   >
                                     <Download size={16} strokeWidth={2.5} />
                                   </button>
                                   <button 
-                                    onClick={() => handleEdit(item)} 
-                                    className="p-2 text-gray-600 hover:bg-white rounded-xl active:scale-90 transition-all border border-transparent hover:border-gray-200 shadow-xs"
-                                    title="Editar"
+                                    onClick={() => handleDelete(item.id)} 
+                                    className="p-1.5 text-rose-500 hover:bg-rose-50 rounded-xl active:scale-90 transition-all border border-transparent hover:border-rose-200"
+                                    title="Excluir Lote"
                                   >
-                                    <Edit2 size={16} strokeWidth={2.5} />
+                                    <Trash2 size={16} strokeWidth={2.5} />
                                   </button>
                                 </div>
                               </div>
@@ -2929,7 +3097,12 @@ const App: React.FC = () => {
                           dataKey="name" 
                           axisLine={false} 
                           tickLine={false} 
-                          tick={{ fill: '#ffffff60', fontSize: 8, fontWeight: 'bold' }} 
+                          interval={0}
+                          angle={-25}
+                          textAnchor="end"
+                          height={40}
+                          tick={{ fill: '#ffffff80', fontSize: 8, fontWeight: 'bold' }} 
+                          tickFormatter={(val: string) => (val && val.length > 10 ? `${val.substring(0, 9)}…` : val)}
                         />
                         <Tooltip 
                           cursor={{ fill: 'rgba(255,255,255,0.05)' }} 
@@ -3464,7 +3637,7 @@ const App: React.FC = () => {
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.9, opacity: 0 }}
-              className="bg-white rounded-[32px] p-8 w-full max-w-sm shadow-2xl flex flex-col items-center text-center"
+              className="bg-white rounded-[32px] p-8 w-full max-w-sm shadow-2xl flex flex-col items-center text-center border border-gray-100"
             >
               <div className="w-20 h-20 bg-red-50 rounded-full flex items-center justify-center text-red-500 mb-6 border border-red-100">
                 <Trash2 size={32} strokeWidth={2.5} />
@@ -3487,6 +3660,417 @@ const App: React.FC = () => {
                   className="flex-1 py-4 bg-brand-red text-white rounded-2xl font-black uppercase text-xs tracking-widest shadow-lg shadow-brand-red/20 active:scale-95 transition-all"
                 >
                   Excluir
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* DELETE BRAND CONFIRMATION MODAL */}
+      <AnimatePresence>
+        {deleteBrandModal.isOpen && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+          >
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white rounded-[32px] p-6 sm:p-8 w-full max-w-md shadow-2xl flex flex-col items-center text-center border border-gray-100"
+            >
+              <div className="w-20 h-20 bg-rose-50 rounded-full flex items-center justify-center text-rose-600 mb-5 border border-rose-100">
+                <Trash2 size={36} strokeWidth={2.5} />
+              </div>
+              <h3 className="text-2xl font-black text-brand-dark mb-2 tracking-tight uppercase">Excluir Marca</h3>
+              <p className="text-gray-600 font-bold text-sm mb-2">
+                Tem certeza que deseja excluir a marca <span className="text-rose-600 font-black uppercase">{deleteBrandModal.brandName}</span>?
+              </p>
+              <p className="text-xs text-gray-400 font-medium mb-6 leading-relaxed">
+                Esta ação removerá permanentemente todos os <strong className="text-gray-700">{deleteBrandModal.count} lote(s)</strong> e <strong className="text-gray-700">{deleteBrandModal.pieces} peça(s)</strong> desta marca do servidor e do seu inventário.
+              </p>
+              <div className="flex gap-3 w-full">
+                <button 
+                  type="button"
+                  onClick={() => setDeleteBrandModal({ isOpen: false, brandName: '', count: 0, pieces: 0 })}
+                  className="flex-1 py-4 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-2xl font-black uppercase text-xs tracking-wider active:scale-95 transition-all"
+                >
+                  Cancelar
+                </button>
+                <button 
+                  type="button"
+                  onClick={confirmDeleteBrand}
+                  className="flex-1 py-4 bg-rose-600 hover:bg-rose-700 text-white rounded-2xl font-black uppercase text-xs tracking-wider shadow-lg shadow-rose-600/30 active:scale-95 transition-all"
+                >
+                  Excluir Marca
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* BRAND EDIT / UPDATE QUANTITIES MODAL */}
+      <AnimatePresence>
+        {brandEditModal.isOpen && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+          >
+            <motion.div 
+              initial={{ scale: 0.95, y: 10 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.95, y: 10 }}
+              className="bg-white rounded-[2.5rem] p-6 sm:p-8 w-full max-w-xl shadow-2xl flex flex-col max-h-[85vh] border border-gray-100"
+            >
+              <div className="flex items-center justify-between pb-4 border-b border-gray-100 mb-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 bg-amber-50 rounded-2xl flex items-center justify-center text-amber-700 border border-amber-200/60 shrink-0">
+                    <Edit2 size={22} strokeWidth={2.5} />
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-black text-brand-dark uppercase tracking-tight">
+                      Editar & Atualizar: {brandEditModal.brandName}
+                    </h3>
+                    <p className="text-xs text-gray-400 font-bold">
+                      Ajuste quantidades ou altere detalhes dos lotes em tempo real
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setBrandEditModal({ isOpen: false, brandName: '' })}
+                  className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full"
+                >
+                  <XCircle size={22} />
+                </button>
+              </div>
+
+              {/* Items List */}
+              <div className="flex-1 overflow-y-auto space-y-3 pr-1 my-2">
+                {(() => {
+                  const brandItems = counts.filter(
+                    c => (c.brand || '').toLowerCase().trim() === brandEditModal.brandName.toLowerCase().trim()
+                  );
+
+                  if (brandItems.length === 0) {
+                    return (
+                      <div className="p-8 text-center bg-gray-50 rounded-2xl border border-dashed border-gray-200">
+                        <p className="text-sm font-bold text-gray-400 uppercase">Nenhum lote registrado nesta marca</p>
+                      </div>
+                    );
+                  }
+
+                  return brandItems.map(item => (
+                    <div 
+                      key={item.id} 
+                      className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <span className="block font-black text-base text-slate-800 uppercase truncate">
+                          {item.model}
+                        </span>
+                        <span className="text-xs text-gray-500 font-medium block">
+                          Cor: {item.color || '-'} | Gênero: {item.gender || '-'} | Chegada: {item.arrivalMonth || '--'}/{item.arrivalYear || '--'}
+                        </span>
+                      </div>
+
+                      {/* Quantity Controls & Edit Action */}
+                      <div className="flex items-center gap-2 justify-between sm:justify-end shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-200">
+                        <div className="flex items-center bg-white rounded-xl border border-slate-300 p-1 shadow-xs">
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateItemQuantity(item.id, Math.max(0, item.total - 1))}
+                            className="w-8 h-8 flex items-center justify-center bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg active:scale-95 font-black"
+                            title="Diminuir quantidade"
+                          >
+                            <Minus size={14} strokeWidth={3} />
+                          </button>
+                          
+                          <input
+                            type="number"
+                            value={item.total}
+                            onChange={(e) => handleUpdateItemQuantity(item.id, parseInt(e.target.value) || 0)}
+                            className="w-14 text-center font-black text-base text-brand-dark bg-transparent border-none focus:outline-none"
+                          />
+
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateItemQuantity(item.id, item.total + 1)}
+                            className="w-8 h-8 flex items-center justify-center bg-brand-blue text-white hover:bg-brand-dark rounded-lg active:scale-95 font-black"
+                            title="Aumentar quantidade"
+                          >
+                            <Plus size={14} strokeWidth={3} />
+                          </button>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setBrandEditModal({ isOpen: false, brandName: '' });
+                            handleEdit(item);
+                          }}
+                          className="px-3 py-2 bg-amber-100 hover:bg-amber-200 text-amber-900 rounded-xl font-black text-xs uppercase flex items-center gap-1 border border-amber-300 shadow-xs"
+                          title="Editar grade e detalhes completos deste lote"
+                        >
+                          <Edit2 size={14} strokeWidth={2.5} />
+                          <span className="hidden sm:inline">Grade</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleDelete(item.id)}
+                          className="p-2 text-rose-500 hover:bg-rose-100/70 rounded-xl active:scale-90 transition-all border border-transparent hover:border-rose-200"
+                          title="Excluir Lote"
+                        >
+                          <Trash2 size={16} strokeWidth={2.5} />
+                        </button>
+                      </div>
+                    </div>
+                  ));
+                })()}
+              </div>
+
+              {/* Modal Bottom Bar */}
+              <div className="pt-4 border-t border-gray-100 flex flex-col sm:flex-row items-center justify-between gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const currentBrand = brandEditModal.brandName;
+                    setBrandEditModal({ isOpen: false, brandName: '' });
+                    handleStartWithSameBrand(currentBrand);
+                  }}
+                  className="w-full sm:w-auto py-3 px-5 bg-brand-blue hover:bg-brand-dark text-white font-black text-xs uppercase tracking-wider rounded-2xl flex items-center justify-center gap-2 shadow-md active:scale-95 transition-all"
+                >
+                  <Plus size={16} strokeWidth={3} />
+                  <span>Contar Novo Modelo em {brandEditModal.brandName}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setBrandEditModal({ isOpen: false, brandName: '' })}
+                  className="w-full sm:w-auto py-3 px-6 bg-gray-100 hover:bg-gray-200 text-gray-700 font-black text-xs uppercase tracking-wider rounded-2xl active:scale-95 transition-all"
+                >
+                  Concluído / Fechar
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* BRAND OVERALL COUNT PREVIEW MODAL */}
+      <AnimatePresence>
+        {viewingBrandPreview && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md overflow-y-auto"
+          >
+            <motion.div 
+              initial={{ scale: 0.95, y: 15 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.95, y: 15 }}
+              className="bg-white rounded-[2.5rem] w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col my-8 max-h-[90vh] border border-gray-100 text-brand-dark"
+            >
+              {/* Top Header Banner */}
+              <div className="bg-brand-dark p-4 text-center text-white flex items-center justify-between px-6">
+                <div className="flex items-center gap-2">
+                  <Package size={18} className="text-brand-accent" />
+                  <span className="text-[11px] font-black uppercase tracking-[0.2em] text-gray-200">
+                    Pré-Visualização • Contagem Geral da Marca
+                  </span>
+                </div>
+                <button 
+                  type="button"
+                  onClick={() => setViewingBrandPreview(null)}
+                  className="p-1 text-gray-400 hover:text-white rounded-full transition-colors"
+                >
+                  <XCircle size={22} />
+                </button>
+              </div>
+
+              {/* Modal Body */}
+              <div className="p-6 sm:p-8 space-y-6 overflow-y-auto flex-1 bg-gradient-to-b from-white to-brand-slate/10">
+                <div className="text-center space-y-1">
+                  <h3 className="text-3xl font-display font-black text-brand-dark tracking-tight leading-none uppercase">
+                    {viewingBrandPreview.brandName}
+                  </h3>
+                  <p className="text-[10px] font-black text-brand-blue uppercase tracking-widest">
+                    IDEAL TECIDOS • Controle de Estoque
+                  </p>
+                  <div className="pt-2 flex items-center justify-center gap-2">
+                    {completedBrands[viewingBrandPreview.brandName] ? (
+                      <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-800 border border-emerald-200 flex items-center gap-1">
+                        <CheckCircle2 size={13} /> Contagem Concluída
+                      </span>
+                    ) : (
+                      <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-blue-100 text-blue-800 border border-blue-200 flex items-center gap-1">
+                        ⏳ Em Contagem
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Cards for Overview Metrics */}
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="bg-brand-blue/5 border border-brand-blue/20 rounded-2xl p-4 text-center space-y-1">
+                    <span className="text-[9px] font-black text-brand-blue uppercase tracking-wider block">Total de Peças</span>
+                    <span className="text-2xl sm:text-3xl font-display font-black text-brand-blue block">
+                      {viewingBrandPreview.items.reduce((s, i) => s + (i.total || 0), 0)}
+                    </span>
+                  </div>
+                  <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-center space-y-1">
+                    <span className="text-[9px] font-black text-gray-500 uppercase tracking-wider block">Modelos</span>
+                    <span className="text-2xl sm:text-3xl font-display font-black text-brand-dark block">
+                      {new Set(viewingBrandPreview.items.map(i => (i.model || '').toLowerCase().trim())).size}
+                    </span>
+                  </div>
+                  <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-center space-y-1">
+                    <span className="text-[9px] font-black text-gray-500 uppercase tracking-wider block">Lotes</span>
+                    <span className="text-2xl sm:text-3xl font-display font-black text-brand-dark block">
+                      {viewingBrandPreview.items.length}
+                    </span>
+                  </div>
+                </div>
+
+                {/* CONTAGEM GERAL POR TAMANHO (GRADE CONSOLIDADA DA MARCA) */}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-black text-brand-dark uppercase tracking-widest flex items-center gap-1.5">
+                      <BarChart3 size={16} className="text-brand-blue" />
+                      Contagem Geral por Tamanho (Grade Consolidada)
+                    </span>
+                    <span className="text-[10px] font-black text-gray-400 uppercase">
+                      Soma da Marca
+                    </span>
+                  </div>
+
+                  {(() => {
+                    const aggregatedSizes: Record<string, number> = {};
+                    viewingBrandPreview.items.forEach(item => {
+                      Object.entries(item.sizes || {}).forEach(([sizeKey, qty]) => {
+                        const val = Number(qty) || 0;
+                        if (val > 0) {
+                          aggregatedSizes[sizeKey] = (aggregatedSizes[sizeKey] || 0) + val;
+                        }
+                      });
+                    });
+
+                    const sortedEntries = Object.entries(aggregatedSizes).sort((a, b) => {
+                      const numA = parseFloat(a[0]);
+                      const numB = parseFloat(b[0]);
+                      if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+                      return a[0].localeCompare(b[0]);
+                    });
+
+                    if (sortedEntries.length === 0) {
+                      return (
+                        <div className="p-4 text-center bg-gray-50 rounded-2xl border border-dashed border-gray-200 text-xs font-bold text-gray-400 uppercase">
+                          Nenhuma quantidade contada nesta marca
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 p-4 bg-slate-50/60 border-b border-gray-100">
+                          {sortedEntries.map(([sz, count]) => (
+                            <div key={sz} className="bg-white p-3 rounded-xl border border-gray-200/80 text-center shadow-2xs">
+                              <span className="text-xs font-black text-brand-accent block uppercase">{sz}</span>
+                              <span className="text-lg font-black text-brand-dark block mt-0.5">{count} <span className="text-[10px] font-bold text-gray-400">pcs</span></span>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="p-3 px-4 bg-brand-dark text-white flex items-center justify-between">
+                          <span className="text-xs font-black uppercase tracking-wider text-white/70">TOTAL GERAL CONSOLIDADO</span>
+                          <span className="text-xl font-display font-black text-brand-accent">
+                            {sortedEntries.reduce((acc, [_, c]) => acc + c, 0)} PEÇAS
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                {/* DETALHAMENTO DOS LOTES / MODELOS */}
+                <div className="space-y-3 pt-2">
+                  <span className="text-xs font-black text-brand-dark uppercase tracking-widest block">
+                    Detalhamento dos Lotes ({viewingBrandPreview.items.length})
+                  </span>
+                  <div className="space-y-2.5">
+                    {viewingBrandPreview.items.map((item, idx) => {
+                      const sizeSummary = Object.entries(item.sizes || {})
+                        .filter(([_, q]) => Number(q) > 0)
+                        .map(([sz, q]) => `${sz}: ${q}`)
+                        .join(', ');
+
+                      return (
+                        <div key={item.id || idx} className="p-4 bg-white border border-gray-200 rounded-2xl shadow-2xs space-y-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <div>
+                              <span className="font-black text-sm text-brand-dark uppercase block">
+                                {item.model} {item.gender ? `(${item.gender})` : ''}
+                              </span>
+                              <span className="text-xs text-gray-500 font-medium block">
+                                Cor: {item.color || '-'} | Chegada: {item.arrivalMonth || '--'}/{item.arrivalYear || '--'}
+                              </span>
+                            </div>
+                            <span className="px-3 py-1 bg-brand-blue/10 text-brand-blue rounded-xl font-black text-sm border border-brand-blue/20 shrink-0">
+                              {item.total} pcs
+                            </span>
+                          </div>
+                          {sizeSummary && (
+                            <div className="text-[11px] font-bold text-slate-600 bg-slate-50 p-2 rounded-xl border border-slate-100">
+                              Grade: {sizeSummary}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="p-6 bg-brand-slate border-t border-gray-100 flex flex-col sm:flex-row gap-3">
+                <button 
+                  type="button"
+                  onClick={() => {
+                    generateBrandPDF(viewingBrandPreview.brandName, viewingBrandPreview.items);
+                    showToast('PDF da Marca baixado com sucesso!', 'success');
+                  }}
+                  className="flex-1 py-3.5 bg-brand-red text-white hover:brightness-110 rounded-2xl font-black uppercase text-xs tracking-widest shadow-lg shadow-brand-red/20 active:scale-95 transition-all flex items-center justify-center gap-2"
+                >
+                  <Download size={16} />
+                  Baixar PDF da Marca
+                </button>
+
+                <button 
+                  type="button"
+                  onClick={() => {
+                    const brandName = viewingBrandPreview.brandName;
+                    setViewingBrandPreview(null);
+                    setBrandEditModal({ isOpen: true, brandName });
+                  }}
+                  className="py-3.5 px-5 bg-amber-100 hover:bg-amber-200 text-amber-900 rounded-2xl font-black uppercase text-xs tracking-wider flex items-center justify-center gap-1.5 border border-amber-300 active:scale-95 transition-all"
+                >
+                  <Edit2 size={16} />
+                  Editar / Atualizar
+                </button>
+
+                <button 
+                  type="button"
+                  onClick={() => setViewingBrandPreview(null)}
+                  className="py-3.5 px-6 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-2xl font-black uppercase text-xs tracking-wider active:scale-95 transition-all"
+                >
+                  Fechar
                 </button>
               </div>
             </motion.div>
@@ -3528,7 +4112,26 @@ const App: React.FC = () => {
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <span className="text-[9px] font-black text-gray-400 uppercase tracking-wider block mb-0.5">Marca</span>
-                      <span className="text-sm font-bold text-brand-dark uppercase block truncate">{viewingPdfItem.brand || '-'}</span>
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="text-sm font-bold text-brand-dark uppercase truncate">{viewingPdfItem.brand || '-'}</span>
+                        {viewingPdfItem.brand && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const bName = viewingPdfItem.brand || '';
+                              const brandItems = counts.filter(
+                                c => (c.brand || '').toLowerCase().trim() === bName.toLowerCase().trim()
+                              );
+                              setViewingBrandPreview({ brandName: bName, items: brandItems });
+                            }}
+                            className="text-[9px] font-black text-indigo-700 bg-indigo-50 hover:bg-indigo-100 px-2 py-0.5 rounded-lg border border-indigo-200 uppercase flex items-center gap-1 shrink-0 active:scale-95 transition-all"
+                            title="Ver contagem geral de toda esta marca"
+                          >
+                            <Eye size={10} />
+                            Ver Geral
+                          </button>
+                        )}
+                      </div>
                     </div>
                     <div>
                       <span className="text-[9px] font-black text-gray-400 uppercase tracking-wider block mb-0.5">Tipo de Produto</span>

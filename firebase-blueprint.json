@@ -101,6 +101,14 @@
     "/users/{userId}": {
       "schema": "User",
       "description": "Perfis de usuários."
+    },
+    "/shared_settings/{settingId}": {
+      "schema": "AuditLog",
+      "description": "Configurações compartilhadas da aplicação."
+    },
+    "/inventory/{countId}": {
+      "schema": "InventoryItemScan",
+      "description": "Lotes e contagens do inventário."
     }
   }
 }

@@ -341,28 +341,52 @@ export const DashboardModule: React.FC<DashboardModuleProps> = ({
           {topBrandsData.length === 0 ? (
             <p className="text-xs text-slate-500 text-center py-10">Nenhuma marca registrada no estoque.</p>
           ) : (
-            <div className="h-64 w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={topBrandsData} margin={{ top: 10, right: 10, left: -20, bottom: 20 }}>
-                  <XAxis 
-                    dataKey="name" 
-                    stroke="#64748b" 
-                    fontSize={11} 
-                    tickLine={false} 
-                    interval={0}
-                  />
-                  <YAxis stroke="#64748b" fontSize={11} tickLine={false} />
-                  <Tooltip 
-                    contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b', borderRadius: '12px', fontSize: '12px', color: '#fff' }}
-                    formatter={(val: any) => [`${val} pares`, 'Estoque']}
-                  />
-                  <Bar dataKey="total" radius={[8, 8, 0, 0]}>
-                    {topBrandsData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={BRAND_BAR_COLORS[index % BRAND_BAR_COLORS.length]} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
+            <div className="space-y-4">
+              <div className="h-72 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={topBrandsData} margin={{ top: 15, right: 10, left: -15, bottom: 55 }}>
+                    <XAxis 
+                      dataKey="name" 
+                      stroke="#94a3b8" 
+                      fontSize={10} 
+                      fontWeight={700}
+                      tickLine={false} 
+                      interval={0}
+                      angle={-30}
+                      textAnchor="end"
+                      height={60}
+                      tickFormatter={(val: string) => {
+                        if (!val) return '';
+                        return val.length > 12 ? `${val.substring(0, 10)}…` : val;
+                      }}
+                    />
+                    <YAxis stroke="#94a3b8" fontSize={10} fontWeight={700} tickLine={false} />
+                    <Tooltip 
+                      contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', borderRadius: '12px', fontSize: '12px', color: '#fff', fontWeight: 'bold' }}
+                      formatter={(val: any) => [`${val} pares`, 'Estoque Total']}
+                      labelStyle={{ color: '#38bdf8', fontWeight: '900', textTransform: 'uppercase' }}
+                    />
+                    <Bar dataKey="total" radius={[8, 8, 0, 0]} barSize={36}>
+                      {topBrandsData.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={BRAND_BAR_COLORS[index % BRAND_BAR_COLORS.length]} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+
+              {/* Legenda Detalhada das Marcas */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-2 border-t border-slate-800/80">
+                {topBrandsData.map((item, idx) => (
+                  <div key={idx} className="flex items-center justify-between p-2.5 px-3 bg-slate-950/70 rounded-xl border border-slate-800/80">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="w-3 h-3 rounded-md shrink-0 shadow-xs" style={{ backgroundColor: BRAND_BAR_COLORS[idx % BRAND_BAR_COLORS.length] }}></span>
+                      <span className="text-xs font-bold text-slate-200 truncate uppercase" title={item.name}>{item.name}</span>
+                    </div>
+                    <span className="text-xs font-black text-emerald-400 font-mono shrink-0 ml-1.5">{item.total} <span className="text-[9px] text-slate-500 font-bold">prs</span></span>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </div>
