@@ -10,106 +10,58 @@ service cloud.firestore {
     function isSignedIn() {
       return request.auth != null;
     }
-    
+
     function isOwner(userId) {
       return isSignedIn() && request.auth.uid == userId;
-    }
-
-    function isValidId(id) {
-      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
-    }
-
-    function incoming() {
-      return request.resource.data;
-    }
-
-    function existing() {
-      return resource.data;
-    }
-
-    // --- Entity Validations ---
-    
-    function isValidInventoryCount(data) {
-      return data.keys().hasAll(['productType', 'model', 'gridType', 'sizes', 'total', 'createdAt', 'userId'])
-        && data.productType is string
-        && data.model is string
-        && data.gridType in ['LETTER', 'NUMERIC']
-        && data.sizes is map
-        && data.total is number && data.total >= 0
-        && data.createdAt is number
-        && (data.userId.matches('^device_.*') || data.userId == 'guest' || (request.auth != null && data.userId == request.auth.uid))
-        && (!data.keys().contains('arrivalMonth') || data.arrivalMonth is string)
-        && (!data.keys().contains('arrivalYear') || data.arrivalYear is string)
-        && (!data.keys().contains('brand') || data.brand is string)
-        && (!data.keys().contains('color') || data.color is string);
-    }
-
-    function isValidBarcodeReference(data) {
-      return data.keys().hasAll(['barcode', 'brand', 'model', 'gridType', 'sizes', 'total', 'createdAt', 'userId'])
-        && data.barcode is string
-        && data.brand is string
-        && data.model is string
-        && data.gridType in ['LETTER', 'NUMERIC']
-        && data.sizes is map
-        && data.total is number && data.total >= 0
-        && data.createdAt is number
-        && (data.userId.matches('^device_.*') || data.userId == 'guest' || (request.auth != null && data.userId == request.auth.uid));
-    }
-
-    function isValidUser(data) {
-      return data.keys().hasAll(['uid', 'email'])
-        && data.uid == request.auth.uid
-        && data.email is string;
     }
 
     // --- Collections ---
 
     match /test/connection {
-      allow get: if true;
+      allow read, write: if true;
     }
 
     match /inventory/{countId} {
-      allow read: if true;
-      
-      allow create: if (incoming().userId == 'guest' || incoming().userId.matches('^device_.*') || isSignedIn())
-        && isValidId(countId) 
-        && isValidInventoryCount(incoming())
-        && incoming().createdAt is number;
-      
-      allow update: if (incoming().userId == 'guest' || incoming().userId.matches('^device_.*') || (isSignedIn() && incoming().userId == request.auth.uid))
-        && isValidInventoryCount(incoming())
-        && incoming().userId == existing().userId
-        && incoming().createdAt == existing().createdAt
-        && (
-          // Action: Edit fields
-          incoming().diff(existing()).affectedKeys().hasOnly(['productType', 'model', 'brand', 'color', 'arrivalMonth', 'arrivalYear', 'gridType', 'sizes', 'total'])
-        );
-        
-      allow delete: if true;
+      allow read, write: if true;
     }
 
     match /inventory_barcodes/{barcode} {
-      allow read: if true;
-      
-      allow create: if (incoming().userId == 'guest' || incoming().userId.matches('^device_.*') || isSignedIn())
-        && isValidId(barcode) 
-        && isValidBarcodeReference(incoming());
-      
-      allow update: if (incoming().userId == 'guest' || incoming().userId.matches('^device_.*') || isSignedIn())
-        && isValidBarcodeReference(incoming())
-        && (
-          incoming().diff(existing()).affectedKeys().hasOnly(['barcode', 'brand', 'model', 'productType', 'color', 'arrivalMonth', 'arrivalYear', 'gridType', 'sizes', 'total', 'updatedAt', 'lastCountDate', 'gender', 'countHistory', 'userId', 'createdAt'])
-        );
-        
-      allow delete: if true;
+      allow read, write: if true;
+    }
+
+    match /products/{barcode} {
+      allow read, write: if true;
+    }
+
+    match /inventories/{inventoryId} {
+      allow read, write: if true;
+    }
+
+    match /inventory_scans/{scanId} {
+      allow read, write: if true;
+    }
+
+    match /audit_logs/{logId} {
+      allow read, write: if true;
+    }
+
+    match /stock_movements/{movId} {
+      allow read, write: if true;
+    }
+
+    match /counts/{countId} {
+      allow read, write: if true;
+    }
+
+    match /barcode_references/{id} {
+      allow read, write: if true;
     }
 
     match /users/{userId} {
-      allow get: if isOwner(userId) || (userId is string && userId.matches('^device_.*'));
-      allow create, update: if (isOwner(userId) && isValidUser(incoming())) || (userId is string && userId.matches('^device_.*'));
-      
+      allow read, write: if true;
+
       match /{allPaths=**} {
-        allow read, write: if isOwner(userId) || (userId is string && userId.matches('^device_.*'));
+        allow read, write: if true;
       }
     }
   }

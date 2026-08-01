@@ -122,8 +122,27 @@ export interface InventoryCount {
   sizes: Record<string, number>;
   total: number;
   createdAt: number;
+  updatedAt?: number;
   userId: string;
   gender?: string;
+  observations?: string;
+  countedBy?: string;
+  status?: string;
+}
+
+export interface RegisteredProduct {
+  id: string;
+  code: string;
+  productType: string;
+  model: string;
+  brand: string;
+  color: string;
+  gender?: string;
+  arrivalMonth?: string;
+  arrivalYear?: string;
+  gridType?: SizeGridType;
+  expectedQty?: number;
+  createdAt: number;
 }
 
 export interface ColumnMapping {

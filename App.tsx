@@ -192,13 +192,25 @@ const App: React.FC = () => {
   // Firestore sync for brand statuses
   useEffect(() => {
     if (!currentUserId) return;
+    try {
+      const saved = localStorage.getItem(`brand_statuses_${currentUserId}`);
+      if (saved) {
+        setCompletedBrands(JSON.parse(saved));
+      }
+    } catch (e) {
+      // Ignore JSON parse error
+    }
+
     const docRef = doc(db, 'users', currentUserId, 'settings', 'brand_statuses');
     const unsub = onSnapshot(docRef, (docSnap) => {
       if (docSnap.exists()) {
-        setCompletedBrands(docSnap.data().completed || {});
+        const val = docSnap.data().completed || {};
+        setCompletedBrands(val);
+        localStorage.setItem(`brand_statuses_${currentUserId}`, JSON.stringify(val));
       }
     }, (err) => {
       console.warn("Brand statuses load notice:", err);
+      handleFirestoreError(err, OperationType.GET, `users/${currentUserId}/settings/brand_statuses`);
     });
     return () => unsub();
   }, [currentUserId]);
@@ -214,10 +226,12 @@ const App: React.FC = () => {
 
     if (currentUserId) {
       try {
+        localStorage.setItem(`brand_statuses_${currentUserId}`, JSON.stringify(updated));
         const docRef = doc(db, 'users', currentUserId, 'settings', 'brand_statuses');
         await setDoc(docRef, { completed: updated }, { merge: true });
       } catch (err) {
-        console.error("Error saving brand status to Firestore:", err);
+        console.warn("Notice saving brand status to Firestore:", err);
+        handleFirestoreError(err, OperationType.WRITE, `users/${currentUserId}/settings/brand_statuses`);
       }
     }
   };
@@ -705,8 +719,28 @@ const App: React.FC = () => {
     const isSingleDelete = deleteModal.id !== 'ALL';
     const deleteId = deleteModal.id;
     
-    // Close modal immediately for better UX
+    if (!deleteId) return;
+
+    // Save previous state for rollback in case of error
+    const previousCounts = [...counts];
+
+    // Close modal immediately for optimal UX
     setDeleteModal({ isOpen: false, id: '' });
+    
+    // OPTIMISTIC UPDATE: Update local state immediately for instant visual feedback
+    if (deleteId === 'ALL') {
+      setCounts([]);
+      if (editingId) {
+        setCurrentView(AppView.HOME);
+        setEditingId(null);
+      }
+    } else {
+      setCounts(prev => prev.filter((item) => item.id !== deleteId));
+      if (editingId === deleteId) {
+        setCurrentView(AppView.HOME);
+        setEditingId(null);
+      }
+    }
     
     try {
       if (deleteId === 'ALL') {
@@ -725,14 +759,12 @@ const App: React.FC = () => {
       } else {
         await deleteDoc(doc(db, 'inventory', deleteId));
         showToast('Registro excluído com sucesso');
-        
-        if (editingId === deleteId) {
-          setCurrentView(AppView.HOME);
-          setEditingId(null);
-        }
       }
     } catch (error: any) {
       console.error("Delete Error:", error);
+      
+      // Rollback optimistic state change if Firebase deletion fails
+      setCounts(previousCounts);
       
       let msg = 'Erro ao excluir registro';
       if (error.code === 'permission-denied') {
@@ -971,49 +1003,54 @@ const App: React.FC = () => {
     const dateStr = now.toLocaleDateString('pt-BR');
     const timeStr = now.toLocaleTimeString('pt-BR');
 
-    // Header Design
-    doc.setFillColor(192, 36, 40); // brand-red
-    doc.rect(0, 0, 210, 15, 'F');
+    // Header Design - Modern Navy Banner
+    doc.setFillColor(15, 23, 42); // slate-900 / dark navy
+    doc.rect(0, 0, 210, 16, 'F');
+    doc.setFillColor(225, 29, 72); // rose-600 / brand red accent bar
+    doc.rect(0, 16, 210, 2, 'F');
     
+    // Brand Title
     doc.setFontSize(22);
-    doc.setTextColor(192, 36, 40); // brand-red
+    doc.setTextColor(15, 23, 42);
     doc.setFont(undefined, 'bold');
     doc.text('IDEAL TECIDOS', 14, 30);
     
-    doc.setFontSize(10);
-    doc.setTextColor(29, 43, 91); // brand-blue
-    doc.setFont(undefined, 'bold');
-    doc.text('CONTROLE DE ESTOQUE - COMPROVANTE', 14, 36);
-
-    // Metadata Box
-    doc.setDrawColor(230, 230, 230);
-    doc.setFillColor(250, 250, 250);
-    doc.roundedRect(14, 45, 182, 30, 3, 3, 'FD');
-
     doc.setFontSize(9);
-    doc.setTextColor(100, 100, 100);
+    doc.setTextColor(100, 116, 139); // slate-500
     doc.setFont(undefined, 'bold');
-    doc.text('PRODUTO:', 20, 53);
-    doc.text('MODELO:', 20, 60);
-    doc.text('MARCA/COR:', 20, 67);
+    doc.text('COMPROVANTE DE CONTAGEM DE ESTOQUE', 14, 36);
 
-    doc.setTextColor(29, 43, 91);
-    doc.text(item.productType?.toUpperCase() || '-', 45, 53);
+    // Metadata Card Box
+    doc.setDrawColor(226, 232, 240); // slate-200
+    doc.setFillColor(248, 250, 252); // slate-50
+    doc.roundedRect(14, 43, 182, 32, 3, 3, 'FD');
+
+    doc.setFontSize(8.5);
+    doc.setTextColor(100, 116, 139);
+    doc.setFont(undefined, 'bold');
+    doc.text('MARCA:', 20, 52);
+    doc.text('MODELO:', 20, 59);
+    doc.text('COR / TIPO:', 20, 66);
+
+    doc.setTextColor(15, 23, 42);
+    doc.text(item.brand?.toUpperCase() || '-', 48, 52);
     const modelWithGender = (item.model || '').toUpperCase() + (item.gender ? ` (${item.gender})` : '');
-    doc.text(modelWithGender || '-', 45, 60);
-    doc.text(`${item.brand || '-'} / ${item.color || '-'}`, 45, 67);
+    doc.text(modelWithGender || '-', 48, 59);
+    doc.text(`${item.color || '-'} (${item.productType || '-'})`, 48, 66);
 
-    doc.setTextColor(100, 100, 100);
-    doc.text('DATA:', 130, 53);
-    doc.text('CHEGADA:', 130, 60);
-    doc.text('TOTAL:', 130, 67);
+    doc.setTextColor(100, 116, 139);
+    doc.text('DATA:', 125, 52);
+    doc.text('CHEGADA:', 125, 59);
+    doc.text('TOTAL PEÇAS:', 125, 66);
 
-    doc.setTextColor(29, 43, 91);
-    doc.text(dateStr, 150, 53);
-    doc.text(`${item.arrivalMonth || '--'}/${item.arrivalYear || '--'}`, 150, 60);
+    doc.setTextColor(15, 23, 42);
+    doc.text(dateStr, 155, 52);
+    doc.text(`${item.arrivalMonth || '--'}/${item.arrivalYear || '--'}`, 155, 59);
+    
     doc.setFontSize(11);
-    doc.setTextColor(192, 36, 40);
-    doc.text(item.total?.toString() || '0', 150, 67);
+    doc.setTextColor(225, 29, 72); // rose-600
+    doc.setFont(undefined, 'bold');
+    doc.text(item.total?.toString() || '0', 155, 66);
 
     // Grid Table
     const tableRows = Object.entries(item.sizes || {})
@@ -1021,32 +1058,131 @@ const App: React.FC = () => {
       .map(([size, qty]) => [size, qty.toString()]);
 
     autoTable(doc, {
-      startY: 85,
-      head: [['Tamanho', 'Quantidade']],
+      startY: 83,
+      head: [['Tamanho / Numeração', 'Quantidade Contada']],
       body: tableRows,
-      theme: 'grid',
+      theme: 'striped',
       headStyles: { 
-        fillColor: [29, 43, 91],
+        fillColor: [15, 23, 42],
         textColor: [255, 255, 255],
-        fontSize: 10,
+        fontSize: 9.5,
         fontStyle: 'bold',
         halign: 'center'
       },
+      alternateRowStyles: { fillColor: [248, 250, 252] },
+      bodyStyles: { textColor: [30, 41, 59] },
       columnStyles: {
-        0: { halign: 'center', fontStyle: 'bold', cellWidth: 40 },
-        1: { halign: 'center', fontSize: 12, fontStyle: 'bold' }
+        0: { halign: 'center', fontStyle: 'bold', cellWidth: 50 },
+        1: { halign: 'center', fontSize: 11, fontStyle: 'bold', textColor: [15, 23, 42] }
       },
-      margin: { left: 40, right: 40 }
+      margin: { left: 35, right: 35 }
     });
 
     // Footer
+    doc.setDrawColor(226, 232, 240);
+    doc.line(14, doc.internal.pageSize.getHeight() - 15, 196, doc.internal.pageSize.getHeight() - 15);
     doc.setFontSize(8);
-    doc.setTextColor(150, 150, 150);
-    const footerText = `Documento emitido via Ideal Tecidos - Controle de Estoque em ${dateStr} ${timeStr}`;
-    doc.text(footerText, 14, doc.internal.pageSize.getHeight() - 10);
+    doc.setTextColor(148, 163, 184);
+    const footerText = `Documento emitido via Ideal Tecidos - Controle de Estoque | ${dateStr} às ${timeStr}`;
+    doc.text(footerText, 14, doc.internal.pageSize.getHeight() - 9);
 
     const fileName = `Contagem_${item.model || 'Item'}_${item.color || ''}_${dateStr.replace(/\//g, '-')}.pdf`;
     doc.save(fileName);
+  };
+
+  const generateBrandPDF = (brandName: string, brandItems: InventoryCount[]) => {
+    if (!brandItems || brandItems.length === 0) {
+      showToast(`A marca ${brandName} ainda não possui contagens registradas.`, 'error');
+      return;
+    }
+
+    const doc = new jsPDF();
+    const now = new Date();
+    const dateStr = now.toLocaleDateString('pt-BR');
+    const timeStr = now.toLocaleTimeString('pt-BR');
+
+    const totalPieces = brandItems.reduce((sum, item) => sum + item.total, 0);
+
+    // Header Banner
+    doc.setFillColor(15, 23, 42); // slate-900 / dark navy
+    doc.rect(0, 0, 210, 16, 'F');
+    doc.setFillColor(225, 29, 72); // rose-600 / brand red accent bar
+    doc.rect(0, 16, 210, 2, 'F');
+    
+    doc.setFontSize(18);
+    doc.setTextColor(15, 23, 42);
+    doc.setFont(undefined, 'bold');
+    doc.text('IDEAL TECIDOS', 14, 28);
+    
+    doc.setFontSize(10);
+    doc.setTextColor(225, 29, 72); // brand red
+    doc.setFont(undefined, 'bold');
+    doc.text(`RELATÓRIO ESPECÍFICO DE ESTOQUE - MARCA: ${brandName.toUpperCase()}`, 14, 34);
+    
+    doc.setFontSize(8.5);
+    doc.setTextColor(100, 116, 139);
+    doc.setFont(undefined, 'normal');
+    doc.text(`Gerado em: ${dateStr} às ${timeStr} | Total: ${totalPieces} peças em ${brandItems.length} lote(s)`, 14, 40);
+
+    // Table data
+    const tableRows = brandItems.map(item => {
+      const sizesStr = Object.entries(item.sizes || {})
+        .filter(([_, qty]) => (qty as any) > 0)
+        .map(([size, qty]) => `${size}: ${qty}`)
+        .join(', ');
+
+      return [
+        new Date(item.createdAt).toLocaleDateString('pt-BR'),
+        item.brand || brandName || '-',
+        (item.model || '') + (item.gender ? ` (${item.gender})` : ''),
+        item.color || '-',
+        `${item.arrivalMonth || ''}${item.arrivalMonth && item.arrivalYear ? '/' : ''}${item.arrivalYear || ''}` || '-',
+        sizesStr || '-',
+        item.total.toString()
+      ];
+    });
+
+    autoTable(doc, {
+      startY: 46,
+      head: [['Data', 'Marca', 'Modelo', 'Cor', 'Chegada', 'Grade Contada', 'Total']],
+      body: tableRows,
+      theme: 'striped',
+      headStyles: { 
+        fillColor: [15, 23, 42],
+        textColor: [255, 255, 255],
+        fontSize: 8.5,
+        fontStyle: 'bold'
+      },
+      alternateRowStyles: { fillColor: [248, 250, 252] },
+      bodyStyles: { textColor: [30, 41, 59] },
+      foot: [[
+        { content: `TOTAL ACUMULADO DA MARCA ${(brandName || '').toUpperCase()}`, colSpan: 6, styles: { halign: 'right', fontStyle: 'bold', fillColor: [15, 23, 42], textColor: [255, 255, 255] } },
+        { content: totalPieces.toString(), styles: { halign: 'center', fontStyle: 'bold', fillColor: [225, 29, 72], textColor: [255, 255, 255], fontSize: 10 } }
+      ]],
+      styles: { fontSize: 8, cellPadding: 3.5, overflow: 'linebreak' },
+      columnStyles: {
+        0: { cellWidth: 22 },
+        1: { fontStyle: 'bold', cellWidth: 28 },
+        2: { fontStyle: 'bold', cellWidth: 38 },
+        3: { cellWidth: 22 },
+        4: { halign: 'center', cellWidth: 20 },
+        5: { cellWidth: 46 },
+        6: { halign: 'center', fontStyle: 'bold', fontSize: 9.5, cellWidth: 16 }
+      }
+    });
+
+    // Footer
+    doc.setDrawColor(226, 232, 240);
+    doc.line(14, doc.internal.pageSize.getHeight() - 15, 196, doc.internal.pageSize.getHeight() - 15);
+    doc.setFontSize(8);
+    doc.setTextColor(148, 163, 184);
+    const footerText = `Relatório por Marca - Ideal Tecidos Controle de Estoque | ${dateStr} às ${timeStr}`;
+    doc.text(footerText, 14, doc.internal.pageSize.getHeight() - 9);
+
+    const safeBrandName = brandName.replace(/[^a-zA-Z0-9]/g, '_');
+    const fileName = `Relatorio_Marca_${safeBrandName}_${dateStr.replace(/\//g, '-')}.pdf`;
+    doc.save(fileName);
+    showToast(`PDF da marca ${brandName} baixado com sucesso!`, 'success');
   };
 
   const generatePDF = () => {
@@ -1058,29 +1194,27 @@ const App: React.FC = () => {
     const totalItems = filteredCounts.reduce((sum, item) => sum + item.total, 0);
     const brandAnalysisData = computeBrandSizeAnalysis(filteredCounts);
 
-    // Header Design
-    // Red top banner
-    doc.setFillColor(192, 36, 40); // brand-red
-    doc.rect(0, 0, 210, 15, 'F');
+    // Header Design - Modern Dark Navy Banner with Red Accent
+    doc.setFillColor(15, 23, 42); // slate-900
+    doc.rect(0, 0, 210, 16, 'F');
+    doc.setFillColor(225, 29, 72); // rose-600 accent
+    doc.rect(0, 16, 210, 2, 'F');
     
-    // Main Title in bold red
-    doc.setFontSize(20);
-    doc.setTextColor(192, 36, 40); // brand-red
+    // Main Title
+    doc.setFontSize(18);
+    doc.setTextColor(15, 23, 42);
     doc.setFont(undefined, 'bold');
-    doc.text('IDEAL TECIDOS - CONTROLE DE ESTOQUE', 14, 29);
+    doc.text('IDEAL TECIDOS', 14, 28);
     
-    // Subtitle in navy blue
     doc.setFontSize(10);
-    doc.setTextColor(29, 43, 91); // brand-blue / navy
+    doc.setTextColor(225, 29, 72);
     doc.setFont(undefined, 'bold');
-    doc.text('CALÇADOS E CONFECÇÕES', 14, 35);
+    doc.text('RELATÓRIO GERAL DE CONTROLE E GIRO DE ESTOQUE', 14, 34);
     
-    // Metadata text
-    doc.setFontSize(9);
-    doc.setTextColor(100, 100, 100);
+    doc.setFontSize(8.5);
+    doc.setTextColor(100, 116, 139);
     doc.setFont(undefined, 'normal');
-    doc.text('Relatório de Controle de Estoque', 14, 41);
-    doc.text(`Gerado em: ${dateStr} às ${timeStr}`, 14, 46);
+    doc.text(`Gerado em: ${dateStr} às ${timeStr} | Total Geral: ${totalItems} peças em estoque`, 14, 40);
 
     // Table data
     const tableRows = filteredCounts.map(item => {
@@ -1091,9 +1225,8 @@ const App: React.FC = () => {
 
       return [
         new Date(item.createdAt).toLocaleDateString('pt-BR'),
-        item.productType,
-        item.model + (item.gender ? ` (${item.gender})` : ''),
         item.brand || '-',
+        item.model + (item.gender ? ` (${item.gender})` : ''),
         item.color || '-',
         `${item.arrivalMonth || ''}${item.arrivalMonth && item.arrivalYear ? '/' : ''}${item.arrivalYear || ''}` || '-',
         sizesStr || '-',
@@ -1102,31 +1235,31 @@ const App: React.FC = () => {
     });
 
     autoTable(doc, {
-      startY: 52,
-      head: [['Data', 'Produto', 'Modelo', 'Marca', 'Cor', 'Chegada', 'Grade', 'Total']],
+      startY: 46,
+      head: [['Data', 'Marca', 'Modelo', 'Cor', 'Chegada', 'Grade', 'Total']],
       body: tableRows,
-      theme: 'grid',
+      theme: 'striped',
       headStyles: { 
-        fillColor: [29, 43, 91], // brand-blue / navy
+        fillColor: [15, 23, 42],
         textColor: [255, 255, 255],
-        fontSize: 9,
+        fontSize: 8.5,
         fontStyle: 'bold'
       },
-      alternateRowStyles: { fillColor: [248, 249, 250] },
+      alternateRowStyles: { fillColor: [248, 250, 252] },
+      bodyStyles: { textColor: [30, 41, 59] },
       foot: [[
-        { content: 'TOTAL GERAL ACUMULADO', colSpan: 7, styles: { halign: 'right', fontStyle: 'bold', fillColor: [29, 43, 91], textColor: [255, 255, 255] } },
-        { content: totalItems.toString(), styles: { halign: 'center', fontStyle: 'bold', fillColor: [29, 43, 91], textColor: [255, 255, 255], fontSize: 10 } }
+        { content: 'TOTAL GERAL ACUMULADO', colSpan: 6, styles: { halign: 'right', fontStyle: 'bold', fillColor: [15, 23, 42], textColor: [255, 255, 255] } },
+        { content: totalItems.toString(), styles: { halign: 'center', fontStyle: 'bold', fillColor: [225, 29, 72], textColor: [255, 255, 255], fontSize: 10 } }
       ]],
-      styles: { fontSize: 8, cellPadding: 3, overflow: 'linebreak' },
+      styles: { fontSize: 8, cellPadding: 3.5, overflow: 'linebreak' },
       columnStyles: {
         0: { cellWidth: 20 },
-        1: { fontStyle: 'bold', cellWidth: 22 },
-        2: { fontStyle: 'bold', cellWidth: 32 },
-        3: { cellWidth: 22 },
-        4: { cellWidth: 18 },
-        5: { halign: 'center', cellWidth: 18 },
-        6: { cellWidth: 36 },
-        7: { halign: 'center', fontStyle: 'bold', fontSize: 9.5, cellWidth: 14 }
+        1: { fontStyle: 'bold', cellWidth: 28 },
+        2: { fontStyle: 'bold', cellWidth: 38 },
+        3: { cellWidth: 20 },
+        4: { halign: 'center', cellWidth: 18 },
+        5: { cellWidth: 42 },
+        6: { halign: 'center', fontStyle: 'bold', fontSize: 9.5, cellWidth: 16 }
       }
     });
 
@@ -1140,14 +1273,14 @@ const App: React.FC = () => {
         currentY = 20;
       }
 
-      doc.setFontSize(12);
-      doc.setTextColor(29, 43, 91); // brand-blue / navy
+      doc.setFontSize(11);
+      doc.setTextColor(15, 23, 42);
       doc.setFont(undefined, 'bold');
       doc.text('CONTROLE DE GIRO DE NUMERAÇÕES POR MARCA', 14, currentY);
       
       currentY += 4.5;
       doc.setFontSize(8);
-      doc.setTextColor(100, 100, 100);
+      doc.setTextColor(100, 116, 139);
       doc.setFont(undefined, 'normal');
       doc.text('Classificação por volume de saída: Saindo Bastante (Alta), Saindo Mais ou Menos (Média), Saindo Pouco (Baixa)', 14, currentY);
 
@@ -1177,38 +1310,33 @@ const App: React.FC = () => {
         startY: currentY,
         head: [['Marca', 'Total', 'Saindo Bastante (Alta)', 'Saindo Mais ou Menos (Média)', 'Saindo Pouco (Baixa)']],
         body: brandTableRows,
-        theme: 'grid',
+        theme: 'striped',
         headStyles: { 
-          fillColor: [192, 36, 40], // brand-red
+          fillColor: [30, 41, 59],
           textColor: [255, 255, 255],
-          fontSize: 8.5,
+          fontSize: 8,
           fontStyle: 'bold'
         },
-        alternateRowStyles: { fillColor: [248, 249, 250] },
-        styles: { fontSize: 8, cellPadding: 3, overflow: 'linebreak' },
+        alternateRowStyles: { fillColor: [248, 250, 252] },
+        bodyStyles: { textColor: [30, 41, 59] },
+        styles: { fontSize: 7.5, cellPadding: 3, overflow: 'linebreak' },
         columnStyles: {
           0: { fontStyle: 'bold', cellWidth: 28 },
-          1: { halign: 'center', fontStyle: 'bold', cellWidth: 18 },
-          2: { cellWidth: 45, textColor: [16, 122, 87] },   // emerald dark text
-          3: { cellWidth: 45, textColor: [180, 83, 9] },   // amber dark text
-          4: { cellWidth: 46, textColor: [190, 18, 60] }   // rose dark text
+          1: { halign: 'center', cellWidth: 18 },
+          2: { cellWidth: 46 },
+          3: { cellWidth: 46 },
+          4: { cellWidth: 44 }
         }
       });
     }
 
-    // Page Number Footers
-    const pageCount = (doc as any).internal.getNumberOfPages();
-    for (let i = 1; i <= pageCount; i++) {
-      doc.setPage(i);
-      doc.setFontSize(8);
-      doc.setTextColor(150, 150, 150);
-      doc.text(
-        `Página ${i} de ${pageCount} — A Ideal Tecidos | Calçados e Confecções`,
-        doc.internal.pageSize.getWidth() / 2,
-        doc.internal.pageSize.getHeight() - 10,
-        { align: 'center' }
-      );
-    }
+    // Footer
+    doc.setDrawColor(226, 232, 240);
+    doc.line(14, doc.internal.pageSize.getHeight() - 15, 196, doc.internal.pageSize.getHeight() - 15);
+    doc.setFontSize(8);
+    doc.setTextColor(148, 163, 184);
+    const footerText = `Relatório de Estoque Geral - Ideal Tecidos | ${dateStr} às ${timeStr}`;
+    doc.text(footerText, 14, doc.internal.pageSize.getHeight() - 9);
 
     doc.save(`Relatorio_Estoque_IdealTecidos_${dateStr.replace(/\//g, '-')}.pdf`);
   };
@@ -1520,26 +1648,6 @@ const App: React.FC = () => {
                 </motion.button>
 
 
-                {/* LER CÓDIGO DE BARRAS ACTION CARD */}
-                <motion.button 
-                  whileTap={{ scale: 0.98 }}
-                  onClick={() => setCurrentView(AppView.BARCODE_FIREBASE)}
-                  className="relative overflow-hidden bg-gradient-to-r from-red-600 via-rose-600 to-red-700 text-white p-4 sm:p-6 rounded-2xl sm:rounded-[2rem] shadow-2xl shadow-red-600/30 flex items-center justify-between group active:brightness-95 transition-all text-left"
-                >
-                  <div className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/10 to-white/0 -translate-x-full group-hover:translate-x-full transition-transform duration-1000"></div>
-                  <div className="flex items-center gap-3 sm:gap-4 min-w-0 pr-2">
-                    <div className="bg-white/20 w-10 h-10 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform duration-300 shadow-inner">
-                      <Barcode size={22} strokeWidth={2.5} className="sm:w-7 sm:h-7" />
-                    </div>
-                    <div className="font-display min-w-0">
-                      <span className="block text-base sm:text-xl font-black tracking-tight uppercase leading-tight mb-0.5">Leitura por Código de Barras</span>
-                      <span className="block text-[9px] sm:text-[10px] font-bold text-white/90 uppercase tracking-wide leading-tight">Bipar código → Cadastrar e Contar Estoque</span>
-                    </div>
-                  </div>
-                  <div className="px-3 sm:px-3.5 py-1.5 bg-white text-red-600 font-black uppercase text-[9px] sm:text-[10px] tracking-wider rounded-xl shadow-md group-hover:bg-red-50 transition-colors shrink-0">
-                    Ler / Bipar
-                  </div>
-                </motion.button>
 
                 <motion.button 
                   whileTap={{ scale: 0.98 }}
@@ -2523,7 +2631,40 @@ const App: React.FC = () => {
                           </div>
 
                           {/* Quick Action Buttons */}
-                          <div className="flex items-center gap-2 shrink-0">
+                          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 flex-wrap justify-end">
+                            {/* Pré-Visualização */}
+                            {brand.items.length > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setExpandedBrand(brand.name);
+                                  setViewingPdfItem(brand.items[0]);
+                                }}
+                                title={`Pré-visualizar contagens de ${brand.name}`}
+                                className="p-3 bg-blue-50 hover:bg-blue-100 text-brand-blue rounded-2xl font-black text-xs flex items-center gap-1.5 border border-blue-200 shadow-sm active:scale-95 transition-all"
+                              >
+                                <Eye size={18} strokeWidth={2.5} />
+                                <span className="hidden sm:inline text-[10px] uppercase">
+                                  Pré-Visualizar
+                                </span>
+                              </button>
+                            )}
+
+                            {/* Baixar PDF da Marca */}
+                            {brand.items.length > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => generateBrandPDF(brand.name, brand.items)}
+                                title={`Baixar PDF da marca ${brand.name}`}
+                                className="p-3 bg-red-50 hover:bg-red-100 text-brand-red rounded-2xl font-black text-xs flex items-center gap-1.5 border border-red-200 shadow-sm active:scale-95 transition-all"
+                              >
+                                <Download size={18} strokeWidth={2.5} />
+                                <span className="hidden sm:inline text-[10px] uppercase">
+                                  PDF
+                                </span>
+                              </button>
+                            )}
+
                             {/* Toggle Concluded */}
                             <button
                               type="button"
@@ -2572,9 +2713,20 @@ const App: React.FC = () => {
                             >
                               {isExpanded ? 'Ocultar Lotes' : `Ver ${brand.items.length} Lote(s) da Marca`}
                             </button>
-                            <span className="text-[9px] font-bold text-gray-400">
-                              Último lote: {new Date(brand.items[0]?.createdAt || 0).toLocaleDateString('pt-BR')}
-                            </span>
+                            <div className="flex items-center gap-3">
+                              <button
+                                type="button"
+                                onClick={() => generateBrandPDF(brand.name, brand.items)}
+                                className="text-[10px] font-black text-brand-red uppercase tracking-wider hover:underline flex items-center gap-1"
+                                title="Baixar relatório em PDF desta marca"
+                              >
+                                <Download size={12} />
+                                PDF da Marca
+                              </button>
+                              <span className="text-[9px] font-bold text-gray-400">
+                                Último: {new Date(brand.items[0]?.createdAt || 0).toLocaleDateString('pt-BR')}
+                              </span>
+                            </div>
                           </div>
                         )}
 
@@ -2586,23 +2738,37 @@ const App: React.FC = () => {
                             className="mt-3 space-y-2 pt-2 border-t border-dashed border-gray-200"
                           >
                             {brand.items.map(item => (
-                              <div key={item.id} className="p-3 bg-brand-slate/60 rounded-2xl flex items-center justify-between text-xs font-bold text-brand-dark">
-                                <div>
-                                  <span className="block font-black text-sm uppercase">{item.model}</span>
-                                  <span className="text-[10px] text-gray-500 font-normal">
-                                    Cor: {item.color || '-'} | Gênero: {item.gender || '-'}
+                              <div key={item.id} className="p-3 bg-brand-slate/60 rounded-2xl flex items-center justify-between text-xs font-bold text-brand-dark gap-2">
+                                <div className="min-w-0 flex-1">
+                                  <span className="block font-black text-sm uppercase truncate">{item.model}</span>
+                                  <span className="text-[10px] text-gray-500 font-normal block truncate">
+                                    Cor: {item.color || '-'} | Gênero: {item.gender || '-'} | Chegada: {item.arrivalMonth || '--'}/{item.arrivalYear || '--'}
                                   </span>
                                 </div>
-                                <div className="flex items-center gap-3">
+                                <div className="flex items-center gap-1.5 shrink-0">
                                   <span className="px-3 py-1 bg-white rounded-xl text-brand-blue font-black text-sm shadow-sm border border-gray-100">
                                     {item.total} pcs
                                   </span>
                                   <button 
+                                    onClick={() => setViewingPdfItem(item)} 
+                                    className="p-2 text-brand-blue hover:bg-white rounded-xl active:scale-90 transition-all border border-transparent hover:border-gray-200 shadow-xs"
+                                    title="Pré-visualizar Comprovante / PDF"
+                                  >
+                                    <Eye size={16} strokeWidth={2.5} />
+                                  </button>
+                                  <button 
+                                    onClick={() => generateSinglePDF(item)} 
+                                    className="p-2 text-brand-red hover:bg-white rounded-xl active:scale-90 transition-all border border-transparent hover:border-gray-200 shadow-xs"
+                                    title="Baixar PDF do Lote"
+                                  >
+                                    <Download size={16} strokeWidth={2.5} />
+                                  </button>
+                                  <button 
                                     onClick={() => handleEdit(item)} 
-                                    className="p-2 text-brand-blue hover:bg-white rounded-xl"
+                                    className="p-2 text-gray-600 hover:bg-white rounded-xl active:scale-90 transition-all border border-transparent hover:border-gray-200 shadow-xs"
                                     title="Editar"
                                   >
-                                    <Edit2 size={14} />
+                                    <Edit2 size={16} strokeWidth={2.5} />
                                   </button>
                                 </div>
                               </div>
@@ -3059,14 +3225,6 @@ const App: React.FC = () => {
           </button>
 
           <button 
-            onClick={() => setCurrentView(AppView.BARCODE_FIREBASE)}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-4 rounded-[1.8rem] transition-all duration-500 ${currentView === AppView.BARCODE_FIREBASE ? 'bg-white text-brand-blue shadow-xl' : 'text-white/40 hover:text-white'}`}
-          >
-            <Barcode size={18} />
-            <span className="text-[9px] font-black uppercase tracking-wider leading-none">Cód. Barras</span>
-          </button>
-
-          <button 
             onClick={() => setCurrentView(AppView.INVENTORIES)}
             className={`flex-1 flex items-center justify-center gap-1.5 py-4 rounded-[1.8rem] transition-all duration-500 ${currentView === AppView.INVENTORIES ? 'bg-white text-brand-blue shadow-xl' : 'text-white/40 hover:text-white'}`}
           >
@@ -3359,12 +3517,12 @@ const App: React.FC = () => {
                 <div className="bg-white border border-gray-100 rounded-2xl p-5 space-y-3.5 shadow-sm">
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <span className="text-[9px] font-black text-gray-400 uppercase tracking-wider block mb-0.5">Produto</span>
-                      <span className="text-sm font-bold text-brand-dark uppercase block truncate">{viewingPdfItem.productType || '-'}</span>
-                    </div>
-                    <div>
                       <span className="text-[9px] font-black text-gray-400 uppercase tracking-wider block mb-0.5">Marca</span>
                       <span className="text-sm font-bold text-brand-dark uppercase block truncate">{viewingPdfItem.brand || '-'}</span>
+                    </div>
+                    <div>
+                      <span className="text-[9px] font-black text-gray-400 uppercase tracking-wider block mb-0.5">Tipo de Produto</span>
+                      <span className="text-sm font-bold text-brand-dark uppercase block truncate">{viewingPdfItem.productType || '-'}</span>
                     </div>
                   </div>
 
@@ -3457,52 +3615,89 @@ const App: React.FC = () => {
                       const doc = new jsPDF();
                       const dateStr = new Date(viewingPdfItem.createdAt).toLocaleDateString('pt-BR');
                       const timeStr = new Date(viewingPdfItem.createdAt).toLocaleTimeString('pt-BR');
-                      doc.setFillColor(192, 36, 40);
-                      doc.rect(0, 0, 210, 15, 'F');
+
+                      // Header Design - Modern Navy Banner
+                      doc.setFillColor(15, 23, 42); // slate-900 / dark navy
+                      doc.rect(0, 0, 210, 16, 'F');
+                      doc.setFillColor(225, 29, 72); // rose-600 / brand red accent bar
+                      doc.rect(0, 16, 210, 2, 'F');
+                      
+                      // Brand Title
                       doc.setFontSize(22);
-                      doc.setTextColor(192, 36, 40);
+                      doc.setTextColor(15, 23, 42);
                       doc.setFont(undefined, 'bold');
                       doc.text('IDEAL TECIDOS', 14, 30);
-                      doc.setFontSize(10);
-                      doc.setTextColor(29, 43, 91);
-                      doc.text('CONTROLE DE ESTOQUE - COMPROVANTE', 14, 36);
-                      doc.setDrawColor(230, 230, 230);
-                      doc.roundedRect(14, 45, 182, 30, 3, 3, 'FD');
+                      
                       doc.setFontSize(9);
-                      doc.setTextColor(100, 100, 100);
-                      doc.text('PRODUTO:', 20, 53);
-                      doc.text('MODELO:', 20, 60);
-                      doc.text('MARCA/COR:', 20, 67);
-                      doc.setTextColor(29, 43, 91);
-                      doc.text(viewingPdfItem.productType?.toUpperCase() || '-', 45, 53);
+                      doc.setTextColor(100, 116, 139); // slate-500
+                      doc.setFont(undefined, 'bold');
+                      doc.text('COMPROVANTE DE CONTAGEM DE ESTOQUE', 14, 36);
+
+                      // Metadata Card Box
+                      doc.setDrawColor(226, 232, 240); // slate-200
+                      doc.setFillColor(248, 250, 252); // slate-50
+                      doc.roundedRect(14, 43, 182, 32, 3, 3, 'FD');
+
+                      doc.setFontSize(8.5);
+                      doc.setTextColor(100, 116, 139);
+                      doc.setFont(undefined, 'bold');
+                      doc.text('MARCA:', 20, 52);
+                      doc.text('MODELO:', 20, 59);
+                      doc.text('COR / TIPO:', 20, 66);
+
+                      doc.setTextColor(15, 23, 42);
+                      doc.text(viewingPdfItem.brand?.toUpperCase() || '-', 48, 52);
                       const modelWithGender = (viewingPdfItem.model || '').toUpperCase() + (viewingPdfItem.gender ? ` (${viewingPdfItem.gender})` : '');
-                      doc.text(modelWithGender || '-', 45, 60);
-                      doc.text(`${viewingPdfItem.brand || '-'} / ${viewingPdfItem.color || '-'}`, 45, 67);
-                      doc.setTextColor(100, 100, 100);
-                      doc.text('DATA:', 130, 53);
-                      doc.text('CHEGADA:', 130, 60);
-                      doc.text('TOTAL:', 130, 67);
-                      doc.setTextColor(29, 43, 91);
-                      doc.text(dateStr, 150, 53);
-                      doc.text(`${viewingPdfItem.arrivalMonth || '--'}/${viewingPdfItem.arrivalYear || '--'}`, 150, 60);
+                      doc.text(modelWithGender || '-', 48, 59);
+                      doc.text(`${viewingPdfItem.color || '-'} (${viewingPdfItem.productType || '-'})`, 48, 66);
+
+                      doc.setTextColor(100, 116, 139);
+                      doc.text('DATA:', 125, 52);
+                      doc.text('CHEGADA:', 125, 59);
+                      doc.text('TOTAL PEÇAS:', 125, 66);
+
+                      doc.setTextColor(15, 23, 42);
+                      doc.text(dateStr, 155, 52);
+                      doc.text(`${viewingPdfItem.arrivalMonth || '--'}/${viewingPdfItem.arrivalYear || '--'}`, 155, 59);
+                      
                       doc.setFontSize(11);
-                      doc.setTextColor(192, 36, 40);
-                      doc.text(viewingPdfItem.total?.toString() || '0', 150, 67);
-                      const tableRows = Object.entries(viewingPdfItem.sizes)
+                      doc.setTextColor(225, 29, 72); // rose-600
+                      doc.setFont(undefined, 'bold');
+                      doc.text(viewingPdfItem.total?.toString() || '0', 155, 66);
+
+                      // Grid Table
+                      const tableRows = Object.entries(viewingPdfItem.sizes || {})
                         .filter(([_, qty]) => (qty as any) > 0)
                         .map(([size, qty]) => [size, qty.toString()]);
+
                       autoTable(doc, {
-                        startY: 85,
-                        head: [['Tamanho', 'Quantidade']],
+                        startY: 83,
+                        head: [['Tamanho / Numeração', 'Quantidade Contada']],
                         body: tableRows,
-                        theme: 'grid',
-                        headStyles: { fillColor: [29, 43, 91], textColor: [255, 255, 255], fontSize: 10, fontStyle: 'bold', halign: 'center' },
-                        columnStyles: { 0: { halign: 'center', fontStyle: 'bold', cellWidth: 40 }, 1: { halign: 'center', fontSize: 12, fontStyle: 'bold' } },
-                        margin: { left: 40, right: 40 }
+                        theme: 'striped',
+                        headStyles: { 
+                          fillColor: [15, 23, 42],
+                          textColor: [255, 255, 255],
+                          fontSize: 9.5,
+                          fontStyle: 'bold',
+                          halign: 'center'
+                        },
+                        alternateRowStyles: { fillColor: [248, 250, 252] },
+                        bodyStyles: { textColor: [30, 41, 59] },
+                        columnStyles: {
+                          0: { halign: 'center', fontStyle: 'bold', cellWidth: 50 },
+                          1: { halign: 'center', fontSize: 11, fontStyle: 'bold', textColor: [15, 23, 42] }
+                        },
+                        margin: { left: 35, right: 35 }
                       });
+
+                      // Footer
+                      doc.setDrawColor(226, 232, 240);
+                      doc.line(14, doc.internal.pageSize.getHeight() - 15, 196, doc.internal.pageSize.getHeight() - 15);
                       doc.setFontSize(8);
-                      doc.setTextColor(150, 150, 150);
-                      doc.text(`Documento emitido via Ideal Tecidos - Controle de Estoque em ${dateStr} ${timeStr}`, 14, doc.internal.pageSize.getHeight() - 10);
+                      doc.setTextColor(148, 163, 184);
+                      const footerText = `Documento emitido via Ideal Tecidos - Controle de Estoque | ${dateStr} às ${timeStr}`;
+                      doc.text(footerText, 14, doc.internal.pageSize.getHeight() - 9);
                       
                       const blobUrl = doc.output('bloburl');
                       const printWindow = window.open(blobUrl, '_blank');
