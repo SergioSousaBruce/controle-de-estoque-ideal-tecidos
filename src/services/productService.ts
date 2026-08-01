@@ -10,7 +10,7 @@ import {
   query,
   limit
 } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { db, sanitizeForFirestore } from '../lib/firebase';
 import { ShoeProduct, ColumnMapping } from '../../types';
 import { logAuditAction } from './auditService';
 import * as XLSX from 'xlsx';
@@ -109,7 +109,7 @@ export async function saveProduct(product: ShoeProduct, userName = 'Operador'): 
 
   // Sync to Firestore
   try {
-    await setDoc(doc(db, PRODUCTS_COLLECTION, cleanCode), normalizedProduct);
+    await setDoc(doc(db, PRODUCTS_COLLECTION, cleanCode), sanitizeForFirestore(normalizedProduct));
     await logAuditAction(
       'UPDATE_PRODUCT',
       'CADASTRO',

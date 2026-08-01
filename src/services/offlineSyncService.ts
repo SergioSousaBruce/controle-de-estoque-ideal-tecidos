@@ -1,5 +1,5 @@
 import { InventoryCount } from '../../types';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { db, handleFirestoreError, OperationType, sanitizeForFirestore } from '../lib/firebase';
 import { collection, doc, setDoc } from 'firebase/firestore';
 
 const OFFLINE_COUNTS_KEY = 'ideal_offline_counts_queue';
@@ -82,11 +82,11 @@ export async function syncOfflineQueueToFirebase(userId: string): Promise<{ sync
     for (const item of pendingCounts) {
       try {
         const countRef = doc(collection(db, 'counts'), item.count.id);
-        await setDoc(countRef, {
+        await setDoc(countRef, sanitizeForFirestore({
           ...item.count,
-          userId: userId || item.count.userId,
+          userId: userId || item.count.userId || '',
           syncedAt: Date.now()
-        }, { merge: true });
+        }), { merge: true });
         syncedCounts++;
       } catch (err) {
         console.error('Failed to sync item:', item, err);
@@ -103,10 +103,10 @@ export async function syncOfflineQueueToFirebase(userId: string): Promise<{ sync
     for (const item of pendingBarcodes) {
       try {
         const refDoc = doc(collection(db, 'barcode_references'), item.barcode);
-        await setDoc(refDoc, {
+        await setDoc(refDoc, sanitizeForFirestore({
           ...item.data,
           updatedAt: Date.now()
-        }, { merge: true });
+        }), { merge: true });
         syncedBarcodes++;
       } catch (err) {
         console.error('Failed to sync barcode reference:', item, err);

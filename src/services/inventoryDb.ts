@@ -1,5 +1,5 @@
 import { ShoeBrand, ShoeProduct, ShoeInventory } from '../../types';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { db, handleFirestoreError, OperationType, sanitizeForFirestore } from '../lib/firebase';
 import { 
   collection, 
   doc, 
@@ -172,7 +172,7 @@ export async function saveLocalBrand(brand: ShoeBrand, userId?: string): Promise
   const store = await getStore('brands', 'readwrite');
   if (userId && userId !== 'guest') {
     try {
-      await setDoc(doc(db, 'users', userId, 'shoe_brands', brand.id), brand);
+      await setDoc(doc(db, 'users', userId, 'shoe_brands', brand.id), sanitizeForFirestore(brand));
     } catch (error) {
       console.error("Cloud save brand error:", error);
       handleFirestoreError(error, OperationType.WRITE, `users/${userId}/shoe_brands/${brand.id}`);
@@ -225,7 +225,7 @@ export async function saveLocalProduct(product: ShoeProduct, userId?: string): P
   const store = await getStore('products', 'readwrite');
   if (userId && userId !== 'guest') {
     try {
-      await setDoc(doc(db, 'users', userId, 'shoe_products', product.barcode), product);
+      await setDoc(doc(db, 'users', userId, 'shoe_products', product.barcode), sanitizeForFirestore(product));
     } catch (error) {
       console.error("Cloud save product error:", error);
       handleFirestoreError(error, OperationType.WRITE, `users/${userId}/shoe_products/${product.barcode}`);
@@ -276,7 +276,7 @@ export async function saveLocalInventory(inventory: ShoeInventory, userId?: stri
   const store = await getStore('inventories', 'readwrite');
   if (userId && userId !== 'guest') {
     try {
-      await setDoc(doc(db, 'users', userId, 'shoe_inventories', inventory.id), inventory);
+      await setDoc(doc(db, 'users', userId, 'shoe_inventories', inventory.id), sanitizeForFirestore(inventory));
     } catch (error) {
       console.error("Cloud save inventory error:", error);
       handleFirestoreError(error, OperationType.WRITE, `users/${userId}/shoe_inventories/${inventory.id}`);

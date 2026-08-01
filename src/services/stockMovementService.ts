@@ -1,5 +1,5 @@
 import { collection, addDoc, getDocs, query, orderBy, limit, onSnapshot } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { db, sanitizeForFirestore } from '../lib/firebase';
 import { StockMovement, MovementType } from '../../types';
 
 const MOVEMENTS_COLLECTION = 'stock_movements';
@@ -75,7 +75,7 @@ export async function recordStockMovement(data: {
 
   // 2. Persist to Firestore asynchronously
   try {
-    await addDoc(collection(db, MOVEMENTS_COLLECTION), movement);
+    await addDoc(collection(db, MOVEMENTS_COLLECTION), sanitizeForFirestore(movement));
   } catch (err) {
     console.warn('Stock movement write to cloud pending offline sync:', err);
   }

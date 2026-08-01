@@ -8,7 +8,7 @@ import {
   onSnapshot,
   updateDoc
 } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { db, sanitizeForFirestore } from '../lib/firebase';
 import { ShoeInventory } from '../../types';
 import { logAuditAction } from './auditService';
 
@@ -81,7 +81,7 @@ export async function saveInventorySession(inventory: ShoeInventory, userName = 
   updateLocalInventoriesCache(Array.from(inventoriesCache.values()));
 
   try {
-    await setDoc(doc(db, INVENTORIES_COLLECTION, normalized.id), normalized);
+    await setDoc(doc(db, INVENTORIES_COLLECTION, normalized.id), sanitizeForFirestore(normalized));
     await logAuditAction(
       'CREATE_INVENTORY',
       'INVENTARIOS',
@@ -109,7 +109,7 @@ export async function closeInventorySession(inventoryId: string, userName = 'Ope
   updateLocalInventoriesCache(Array.from(inventoriesCache.values()));
 
   try {
-    await setDoc(doc(db, INVENTORIES_COLLECTION, inventoryId), updated);
+    await setDoc(doc(db, INVENTORIES_COLLECTION, inventoryId), sanitizeForFirestore(updated));
     await logAuditAction(
       'CLOSE_INVENTORY',
       'INVENTARIOS',
@@ -135,7 +135,7 @@ export async function reopenInventorySession(inventoryId: string, userName = 'Op
   updateLocalInventoriesCache(Array.from(inventoriesCache.values()));
 
   try {
-    await setDoc(doc(db, INVENTORIES_COLLECTION, inventoryId), updated);
+    await setDoc(doc(db, INVENTORIES_COLLECTION, inventoryId), sanitizeForFirestore(updated));
     await logAuditAction(
       'REOPEN_INVENTORY',
       'INVENTARIOS',

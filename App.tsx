@@ -31,6 +31,7 @@ import {
   Eye,
   Printer,
   Barcode,
+  ArrowRight,
   Lock,
   Unlock,
   RotateCcw
@@ -62,7 +63,8 @@ import {
   googleProvider,
   handleFirestoreError, 
   OperationType, 
-  validateConnection 
+  validateConnection,
+  sanitizeForFirestore
 } from './src/lib/firebase';
 import firebaseConfig from './firebase-applet-config.json';
 import { 
@@ -158,7 +160,7 @@ const App: React.FC = () => {
     }
 
     try {
-      await setDoc(newDoc, finalCount);
+      await setDoc(newDoc, sanitizeForFirestore(finalCount));
       setCounts(prev => [finalCount, ...prev]);
       return finalCount;
     } catch (err) {
@@ -352,7 +354,7 @@ const App: React.FC = () => {
     } else {
       showToast('Nenhuma marca em contagem travada.', 'success');
     }
-    setCurrentView(AppView.BARCODE_FIREBASE);
+    setCurrentView(AppView.IDENTIFY);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -654,25 +656,27 @@ const App: React.FC = () => {
 
     const productType = lastBrandCount?.productType || lastShoeInfo.productType || 'Tênis Adulto Masculino';
     const gender = lastBrandCount?.gender || lastShoeInfo.gender || getGenderFromProductType(productType) || 'M';
-    const model = lastBrandCount?.model || lastShoeInfo.model || '';
-    const color = lastBrandCount?.color || lastShoeInfo.color || '';
     const arrivalMonth = lastBrandCount?.arrivalMonth || lastShoeInfo.arrivalMonth || (new Date().getMonth() + 1).toString().padStart(2, '0');
     const arrivalYear = lastBrandCount?.arrivalYear || lastShoeInfo.arrivalYear || new Date().getFullYear().toString();
-    const gridType = lastBrandCount?.gridType || lastShoeInfo.gridType || 'LETTER';
+    const gridType = lastBrandCount?.gridType || lastShoeInfo.gridType || 'NUMERIC';
 
-    setFormData({
+    const cleanBrand = brandName.trim();
+    const nextLock = {
       barcode: '',
-      brand: brandName,
+      brand: cleanBrand,
+      model: '',
+      color: '',
       productType: syncProductTypeWithGender(productType, gender),
-      model,
-      color,
       arrivalMonth,
       arrivalYear,
       gridType,
       sizes: {},
       total: 0,
       gender
-    });
+    };
+
+    setActiveLockedReference(nextLock);
+    setFormData(nextLock);
     setEditingId(null);
     setAuthError(null);
     setCurrentView(AppView.IDENTIFY);
@@ -688,8 +692,8 @@ const App: React.FC = () => {
         model: '',
         color: '',
         productType: formData.productType || 'Tênis Adulto Masculino',
-        arrivalMonth: (new Date().getMonth() + 1).toString().padStart(2, '0'),
-        arrivalYear: new Date().getFullYear().toString(),
+        arrivalMonth: formData.arrivalMonth || (new Date().getMonth() + 1).toString().padStart(2, '0'),
+        arrivalYear: formData.arrivalYear || new Date().getFullYear().toString(),
         gridType: formData.gridType || 'NUMERIC',
         sizes: {},
         total: 0,
@@ -698,8 +702,8 @@ const App: React.FC = () => {
       setActiveLockedReference(nextLock);
       setFormData(nextLock);
       setEditingId(null);
-      setCurrentView(AppView.BARCODE_FIREBASE);
-      showToast(`Salvo! Bipe o código da próxima referência da marca ${currentBrand || 'geral'}`, 'success');
+      setCurrentView(AppView.IDENTIFY);
+      showToast(`Salvo! Digite a próxima referência da marca ${currentBrand || 'geral'}`, 'success');
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
   };
@@ -873,24 +877,30 @@ const App: React.FC = () => {
 
     // Sanitize data
     const productType = (formData.productType || 'Calçado').trim();
-    const model = (formData.model || '').trim();
-    const brand = (formData.brand || '').trim();
+    const brand = (formData.brand || activeLockedReference?.brand || '').trim();
+    let model = (formData.model || '').trim();
 
-    if (!brand || !model) {
-      showToast('Preencha Marca e Modelo', 'error');
+    if (!model && formData.barcode?.trim()) {
+      model = `Cód ${formData.barcode.trim()}`;
+    } else if (!model) {
+      model = `Ref ${new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`;
+    }
+
+    if (!brand) {
+      showToast('Por favor, selecione ou informe a Marca', 'error');
       return null;
     }
 
     setIsSaving(true);
     try {
-      // Check for duplicate item created in last 15s to avoid duplicate cards from rapid clicks
+      // Check for duplicate item created in last 2s to avoid duplicate cards from rapid double clicks
       const duplicateRecent = !editingId && counts.find(c => 
         c.brand?.toLowerCase().trim() === brand.toLowerCase() &&
         c.model?.toLowerCase().trim() === model.toLowerCase() &&
         (c.color || '').toLowerCase().trim() === (formData.color || '').toLowerCase().trim() &&
         c.arrivalMonth === (formData.arrivalMonth || '') &&
         c.arrivalYear === (formData.arrivalYear || '') &&
-        Math.abs(Date.now() - (c.createdAt || 0)) < 15000
+        Math.abs(Date.now() - (c.createdAt || 0)) < 2000
       );
 
       const inventoryRef = collection(db, 'inventory');
@@ -907,7 +917,7 @@ const App: React.FC = () => {
 
       const finalCount: InventoryCount = {
         id: itemDoc.id,
-        barcode: (formData.barcode || '').trim() || undefined,
+        barcode: (formData.barcode || '').trim() || '',
         productType: syncProductType,
         model,
         brand: (formData.brand || '').trim(),
@@ -918,11 +928,11 @@ const App: React.FC = () => {
         sizes: formData.sizes as Record<string, number>,
         total: formData.total || 0,
         createdAt,
-        userId: currentUserId,
+        userId: currentUserId || '',
         gender: syncGender
       };
 
-      await setDoc(itemDoc, finalCount);
+      await setDoc(itemDoc, sanitizeForFirestore(finalCount));
 
       // Record stock movement for complete traceability
       const prevQty = editingId ? (counts.find(c => c.id === editingId)?.total || 0) : 0;
@@ -2305,7 +2315,7 @@ const App: React.FC = () => {
                 </div>
 
                 <div className="flex flex-col gap-3 relative z-10 w-full">
-                  {/* Option 1: Save & Scan Next Reference */}
+                  {/* Option 1: Save & Next Reference */}
                   <motion.button 
                     whileHover={{ scale: 1.01 }}
                     whileTap={{ scale: 0.99 }}
@@ -2316,14 +2326,14 @@ const App: React.FC = () => {
                     {isSaving ? (
                       <Loader2 size={22} className="animate-spin" />
                     ) : (
-                      <Barcode size={24} strokeWidth={2.5} />
+                      <ArrowRight size={24} strokeWidth={2.5} />
                     )}
                     <div className="text-left leading-tight">
                       <span className="text-xs font-black uppercase tracking-[0.12em] block">
-                        {isSaving ? 'Salvando...' : 'Salvar e Bipar Próxima Referência'}
+                        {isSaving ? 'Salvando...' : 'Salvar e Contar Próximo Modelo'}
                       </span>
                       <span className="text-[10px] font-bold text-red-100 uppercase tracking-wider block opacity-90">
-                        {formData.brand ? `Continuar em ${formData.brand} • Bipar Próximo Código` : 'Bipar Próximo Código'}
+                        {formData.brand ? `Continuar em ${formData.brand} • Próxima Referência` : 'Salvar e Ir para o Próximo'}
                       </span>
                     </div>
                   </motion.button>

@@ -143,6 +143,14 @@ export const BarcodeScannerManager: React.FC<BarcodeScannerManagerProps> = ({
   // Auto-focus input on mount, tab change, or when locked reference changes
   useEffect(() => {
     if (activeTab === 'SCAN') {
+      if (activeLockedReference && !activeLockedReference.model && !activeLockedReference.barcode) {
+        lastSearchedCodeRef.current = '';
+        setBarcodeInput('');
+        setScannedCode(null);
+        setExistingRef(null);
+        setIsNewReference(false);
+        setIsConfirmedToEdit(false);
+      }
       setTimeout(() => barcodeInputRef.current?.focus(), 150);
     } else {
       loadDatabaseList();

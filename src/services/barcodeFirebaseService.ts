@@ -1,4 +1,4 @@
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { db, handleFirestoreError, OperationType, sanitizeForFirestore } from '../lib/firebase';
 import { 
   doc, 
   getDoc, 
@@ -183,7 +183,7 @@ export async function saveBarcodeReference(
     createdAt: previousData?.createdAt || data.createdAt || now,
     updatedAt: now,
     lastCountDate: now,
-    userId: data.userId,
+    userId: data.userId || '',
     countHistory: updatedHistory
   };
 
@@ -191,12 +191,12 @@ export async function saveBarcodeReference(
   barcodeMemoryCache.set(cleanCode, refPayload);
 
   try {
-    await setDoc(docRef, refPayload, { merge: true });
+    await setDoc(docRef, sanitizeForFirestore(refPayload), { merge: true });
 
     // Also mirror to legacy inventory collection for complete backward compatibility
     try {
       const invRef = doc(db, 'inventory', `bc_${cleanCode}`);
-      await setDoc(invRef, {
+      await setDoc(invRef, sanitizeForFirestore({
         id: `bc_${cleanCode}`,
         productType: refPayload.productType,
         model: refPayload.model,
@@ -208,9 +208,9 @@ export async function saveBarcodeReference(
         sizes: refPayload.sizes,
         total: refPayload.total,
         createdAt: refPayload.createdAt,
-        userId: refPayload.userId,
-        gender: refPayload.gender
-      }, { merge: true });
+        userId: refPayload.userId || '',
+        gender: refPayload.gender || ''
+      }), { merge: true });
     } catch (e) {
       console.warn("Mirror inventory doc save notice:", e);
     }

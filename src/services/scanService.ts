@@ -1,5 +1,5 @@
 import { collection, addDoc } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { db, sanitizeForFirestore } from '../lib/firebase';
 import { InventoryScanItem } from '../../types';
 import { playSuccessBeep, playErrorBeep } from '../utils/audioBeep';
 import { getProductFromCache, sanitizeBarcode } from './productService';
@@ -59,7 +59,7 @@ async function flushScanQueue() {
   try {
     // Process in parallel background promises without blocking UI
     const promises = itemsToFlush.map(item => 
-      addDoc(collection(db, SCANS_COLLECTION), item).catch(e => {
+      addDoc(collection(db, SCANS_COLLECTION), sanitizeForFirestore(item)).catch(e => {
         console.warn('Scan item cloud write pending offline sync:', e);
       })
     );

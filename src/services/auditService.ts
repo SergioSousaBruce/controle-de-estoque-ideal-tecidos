@@ -1,5 +1,5 @@
 import { collection, addDoc, getDocs, query, orderBy, limit, onSnapshot } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { db, handleFirestoreError, OperationType, sanitizeForFirestore } from '../lib/firebase';
 import { AuditLog } from '../../types';
 
 const AUDIT_COLLECTION = 'audit_logs';
@@ -50,7 +50,7 @@ export async function logAuditAction(
 
   // 2. Persist to Firestore asynchronously
   try {
-    await addDoc(collection(db, AUDIT_COLLECTION), logEntry);
+    await addDoc(collection(db, AUDIT_COLLECTION), sanitizeForFirestore(logEntry));
   } catch (err) {
     // Graceful error logging without interrupting main user workflow
     console.warn('Audit log write to cloud pending offline sync:', err);

@@ -108,3 +108,23 @@ export async function validateConnection() {
     }
   }
 }
+
+export function sanitizeForFirestore<T extends Record<string, any>>(obj: T): T {
+  if (!obj || typeof obj !== 'object') return obj;
+  const clean: Record<string, any> = {};
+  for (const [key, val] of Object.entries(obj)) {
+    if (val === undefined) {
+      continue;
+    } else if (val !== null && typeof val === 'object' && !Array.isArray(val) && !(val instanceof Date)) {
+      clean[key] = sanitizeForFirestore(val);
+    } else if (Array.isArray(val)) {
+      clean[key] = val
+        .filter(item => item !== undefined)
+        .map(item => (item !== null && typeof item === 'object' ? sanitizeForFirestore(item) : item));
+    } else {
+      clean[key] = val;
+    }
+  }
+  return clean as T;
+}
+
