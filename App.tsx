@@ -191,11 +191,11 @@ const App: React.FC = () => {
     setTimeout(() => setToast({ message: '', type: null }), 3000);
   };
 
-  // Firestore sync for brand statuses
+  // Firestore sync for shared brand statuses across all employees
   useEffect(() => {
     if (!currentUserId) return;
     try {
-      const saved = localStorage.getItem(`brand_statuses_${currentUserId}`);
+      const saved = localStorage.getItem(`brand_statuses_shared`);
       if (saved) {
         setCompletedBrands(JSON.parse(saved));
       }
@@ -203,16 +203,16 @@ const App: React.FC = () => {
       // Ignore JSON parse error
     }
 
-    const docRef = doc(db, 'users', currentUserId, 'settings', 'brand_statuses');
-    const unsub = onSnapshot(docRef, (docSnap) => {
+    // Subscribe to shared global brand statuses doc so all employees see real-time updates
+    const sharedDocRef = doc(db, 'shared_settings', 'brand_statuses');
+    const unsub = onSnapshot(sharedDocRef, (docSnap) => {
       if (docSnap.exists()) {
         const val = docSnap.data().completed || {};
         setCompletedBrands(val);
-        localStorage.setItem(`brand_statuses_${currentUserId}`, JSON.stringify(val));
+        localStorage.setItem(`brand_statuses_shared`, JSON.stringify(val));
       }
     }, (err) => {
-      console.warn("Brand statuses load notice:", err);
-      handleFirestoreError(err, OperationType.GET, `users/${currentUserId}/settings/brand_statuses`);
+      console.warn("Shared brand statuses listener fallback:", err);
     });
     return () => unsub();
   }, [currentUserId]);
@@ -226,15 +226,17 @@ const App: React.FC = () => {
     const updated = { ...completedBrands, [cleanBrand]: newStatus };
     setCompletedBrands(updated);
 
-    if (currentUserId) {
-      try {
-        localStorage.setItem(`brand_statuses_${currentUserId}`, JSON.stringify(updated));
-        const docRef = doc(db, 'users', currentUserId, 'settings', 'brand_statuses');
-        await setDoc(docRef, { completed: updated }, { merge: true });
-      } catch (err) {
-        console.warn("Notice saving brand status to Firestore:", err);
-        handleFirestoreError(err, OperationType.WRITE, `users/${currentUserId}/settings/brand_statuses`);
+    try {
+      localStorage.setItem(`brand_statuses_shared`, JSON.stringify(updated));
+      const sharedDocRef = doc(db, 'shared_settings', 'brand_statuses');
+      await setDoc(sharedDocRef, { completed: updated, updatedAt: Date.now(), updatedBy: user?.displayName || user?.email || currentUserId }, { merge: true });
+      if (currentUserId) {
+        const userDocRef = doc(db, 'users', currentUserId, 'settings', 'brand_statuses');
+        await setDoc(userDocRef, { completed: updated }, { merge: true }).catch(() => {});
       }
+    } catch (err) {
+      console.warn("Notice saving brand status to Firestore:", err);
+      handleFirestoreError(err, OperationType.WRITE, `shared_settings/brand_statuses`);
     }
   };
 
@@ -479,7 +481,7 @@ const App: React.FC = () => {
     return () => unsubscribe();
   }, []);
 
-  // Firestore sync effect
+  // Firestore sync effect for real-time multi-employee counts
   useEffect(() => {
     if (!currentUserId) {
       setIsSyncing(false);
@@ -487,31 +489,29 @@ const App: React.FC = () => {
     }
 
     setIsSyncing(true);
-    const targetUserId = currentUserId;
     
-    // Defensive check to avoid querying with invalid values
-    if (typeof targetUserId !== 'string' || targetUserId === '') {
-      setIsSyncing(false);
-      return;
-    }
+    // Subscribe to all shared inventory counts so multiple employees see live updates
+    const colRef = collection(db, 'inventory');
 
-    const q = query(
-      collection(db, 'inventory'),
-      where('userId', '==', targetUserId)
-    );
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    const unsubscribe = onSnapshot(colRef, (snapshot) => {
       const newCounts = snapshot.docs.map(doc => ({
         ...doc.data(),
         id: doc.id
       })) as InventoryCount[];
-      // Sort in memory to avoid needing a composite index for now
+      
+      // Sort in memory by newest created count first
       newCounts.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
       setCounts(newCounts);
       setIsSyncing(false);
     }, (error) => {
-      console.error("Firestore List Error:", error, "for userId:", targetUserId);
-      handleFirestoreError(error, OperationType.LIST, 'inventory');
+      console.warn("Firestore shared list notice, falling back to user filter:", error);
+      // Fallback query if needed
+      const qUser = query(collection(db, 'inventory'), where('userId', '==', currentUserId));
+      getDocs(qUser).then(snap => {
+        const userCounts = snap.docs.map(doc => ({ ...doc.data(), id: doc.id })) as InventoryCount[];
+        userCounts.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+        setCounts(userCounts);
+      }).catch(e => console.error("Fallback error:", e));
       setIsSyncing(false);
     });
 
