@@ -3397,7 +3397,7 @@ const App: React.FC = () => {
       </footer>
 
        {/* FIXED FOOTER NAVIGATION (No Print) */}
-      <nav className="no-print fixed bottom-0 left-0 right-0 max-w-lg mx-auto p-4 z-50">
+      <nav className="no-print fixed bottom-0 left-0 right-0 max-w-lg mx-auto p-4 z-50" style={{ paddingBottom: 'calc(1rem + env(safe-area-inset-bottom, 0px))' }}>
         <div className="bg-brand-blue/95 backdrop-blur-xl rounded-[2.5rem] p-2 flex gap-1 shadow-2xl shadow-brand-blue/40 border border-white/10">
           <button 
             onClick={() => setCurrentView(AppView.HOME)}

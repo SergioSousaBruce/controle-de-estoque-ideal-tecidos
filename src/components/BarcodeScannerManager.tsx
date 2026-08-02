@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import { Html5Qrcode } from 'html5-qrcode';
 import { 
   Barcode, 
   Search, 
@@ -31,7 +32,8 @@ import {
   Unlock,
   Zap,
   RotateCcw,
-  LayoutGrid
+  LayoutGrid,
+  Camera
 } from 'lucide-react';
 import { 
   BarcodeReference, 
@@ -126,17 +128,74 @@ export const BarcodeScannerManager: React.FC<BarcodeScannerManagerProps> = ({
   // Safety Modal State
   const [showConfirmModal, setShowConfirmModal] = useState(false);
 
+  // Camera Scanner State
+  const [isCameraActive, setIsCameraActive] = useState(false);
+  const cameraQrRef = useRef<Html5Qrcode | null>(null);
+
   // Debounce & Concurrency Control Refs for Firestore Barcode Lookups
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isSearchingRef = useRef<boolean>(false);
   const lastSearchedCodeRef = useRef<string>('');
 
-  // Cleanup pending search timer on unmount
+  const startCameraScan = () => {
+    setIsCameraActive(true);
+    setTimeout(async () => {
+      try {
+        const devices = await Html5Qrcode.getCameras().catch(() => []);
+        const html5QrCode = new Html5Qrcode("manager-camera-reader");
+        cameraQrRef.current = html5QrCode;
+
+        let cameraIdOrConfig: any = { facingMode: "environment" };
+        if (devices && devices.length > 0) {
+          const backCam = devices.find(d => 
+            d.label.toLowerCase().includes('back') || 
+            d.label.toLowerCase().includes('traseira') || 
+            d.label.toLowerCase().includes('environment') ||
+            d.label.toLowerCase().includes('rear')
+          );
+          if (backCam) cameraIdOrConfig = backCam.id;
+          else cameraIdOrConfig = devices[devices.length - 1].id;
+        }
+
+        await html5QrCode.start(
+          cameraIdOrConfig,
+          { fps: 15, qrbox: { width: 260, height: 160 } },
+          (decodedText) => {
+            stopCameraScan();
+            setBarcodeInput(decodedText);
+            handleBarcodeSearchDirect(decodedText);
+          },
+          () => {}
+        );
+      } catch (err) {
+        console.warn("Camera start error:", err);
+        showToast("Não foi possível acessar a câmera. Digite o código de barras.", "error");
+        setIsCameraActive(false);
+      }
+    }, 250);
+  };
+
+  const stopCameraScan = async () => {
+    if (cameraQrRef.current) {
+      try {
+        if (cameraQrRef.current.isScanning) {
+          await cameraQrRef.current.stop();
+        }
+      } catch (e) {
+        console.warn(e);
+      }
+      cameraQrRef.current = null;
+    }
+    setIsCameraActive(false);
+  };
+
+  // Cleanup pending search timer & camera on unmount
   useEffect(() => {
     return () => {
       if (searchTimeoutRef.current) {
         clearTimeout(searchTimeoutRef.current);
       }
+      stopCameraScan();
     };
   }, []);
 
@@ -631,24 +690,60 @@ export const BarcodeScannerManager: React.FC<BarcodeScannerManagerProps> = ({
                 )}
               </div>
 
-              <button
-                type="submit"
-                disabled={isSearching || !barcodeInput.trim()}
-                className="flex items-center justify-center gap-2 px-6 py-3.5 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white font-bold text-sm rounded-xl transition-all shadow-md shadow-red-600/20"
-              >
-                {isSearching ? (
-                  <>
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                    <span>Consultando...</span>
-                  </>
-                ) : (
-                  <>
-                    <Search className="w-4 h-4" />
-                    <span>Consultar Firebase</span>
-                  </>
-                )}
-              </button>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={isCameraActive ? stopCameraScan : startCameraScan}
+                  className={`flex items-center justify-center gap-2 px-4 py-3.5 font-bold text-xs rounded-xl transition-all border ${
+                    isCameraActive
+                      ? 'bg-amber-500 hover:bg-amber-600 text-white border-amber-600 shadow-sm'
+                      : 'bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-800 dark:text-slate-200 border-slate-300 dark:border-slate-700'
+                  }`}
+                  title="Escanear Código com a Câmera do Celular ou Notebook"
+                >
+                  <Camera className="w-4 h-4" />
+                  <span>{isCameraActive ? 'Fechar Câmera' : 'Usar Câmera'}</span>
+                </button>
+
+                <button
+                  type="submit"
+                  disabled={isSearching || !barcodeInput.trim()}
+                  className="flex-1 sm:flex-initial flex items-center justify-center gap-2 px-6 py-3.5 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white font-bold text-sm rounded-xl transition-all shadow-md shadow-red-600/20"
+                >
+                  {isSearching ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Consultando...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Search className="w-4 h-4" />
+                      <span>Consultar Firebase</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </form>
+
+            {/* Camera Preview Modal / Inline Container */}
+            {isCameraActive && (
+              <div className="mt-4 p-4 bg-slate-950 rounded-2xl border-2 border-brand-red space-y-3">
+                <div className="flex items-center justify-between text-white text-xs font-bold">
+                  <span className="flex items-center gap-2 text-rose-400">
+                    <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping"></span>
+                    Câmera Ativa — Aponte para o Código da Caixa
+                  </span>
+                  <button 
+                    type="button" 
+                    onClick={stopCameraScan}
+                    className="p-1 rounded bg-slate-800 text-slate-300 hover:text-white"
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
+                <div id="manager-camera-reader" className="w-full max-w-sm mx-auto overflow-hidden rounded-2xl border border-slate-700 shadow-md"></div>
+              </div>
+            )}
           </div>
 
           {/* LOOKUP RESULT SECTION */}
