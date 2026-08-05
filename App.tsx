@@ -92,7 +92,7 @@ import {
   getDocs
 } from 'firebase/firestore';
 import { AppView, InventoryCount, SizeGridType, ShoeProduct, ShoeInventory } from './types';
-import { PRODUCT_TYPES, LETTER_SIZES, NUMERIC_SIZES, MONTHS, YEARS, getGenderFromProductType, getDefaultProductTypeFromGender, syncProductTypeWithGender } from './constants';
+import { PRODUCT_TYPES, LETTER_SIZES, NUMERIC_SIZES, MONTHS, YEARS, getGenderFromProductType, getDefaultProductTypeFromGender, syncProductTypeWithGender, getDefaultSizesArray } from './constants';
 import { DEFAULT_BRANDS_LIST } from './src/services/inventoryDb';
 import { computeBrandSizeAnalysis } from './src/utils/brandAnalysis';
 
@@ -2326,18 +2326,7 @@ const App: React.FC = () => {
                 </div>
                 <div className="space-y-4">
                   {(() => {
-                    const isInfantilStatus = (formData.productType || '').toLowerCase().includes('infantil') || 
-                                             formData.gender === 'IM' || 
-                                             formData.gender === 'IF';
-                    const defaultSizes = formData.gridType === 'LETTER' 
-                      ? LETTER_SIZES 
-                      : (isInfantilStatus 
-                          ? NUMERIC_SIZES.filter(s => {
-                              const n = parseInt(s, 10);
-                              return n >= 14 && n <= 37;
-                            })
-                          : NUMERIC_SIZES.filter(s => parseInt(s, 10) >= 33)
-                        );
+                    const defaultSizes = getDefaultSizesArray(formData.gridType, formData.gender, formData.productType);
                     
                     // Get sizes from formData that aren't in defaults
                     const customSizes = Object.keys(formData.sizes || {}).filter(s => !defaultSizes.includes(s));

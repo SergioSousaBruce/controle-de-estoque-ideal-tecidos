@@ -49,7 +49,7 @@ import {
   atualizarProdutoPorCodigo
 } from '../services/barcodeFirebaseService';
 import { SizeGridType, InventoryCount } from '../../types';
-import { PRODUCT_TYPES, LETTER_SIZES, NUMERIC_SIZES, MONTHS, YEARS, getGenderFromProductType, getDefaultProductTypeFromGender, syncProductTypeWithGender } from '../../constants';
+import { PRODUCT_TYPES, LETTER_SIZES, NUMERIC_SIZES, MONTHS, YEARS, getGenderFromProductType, getDefaultProductTypeFromGender, syncProductTypeWithGender, getDefaultSizesArray } from '../../constants';
 import { DEFAULT_BRANDS_LIST } from '../services/inventoryDb';
 
 interface BarcodeScannerManagerProps {
@@ -292,7 +292,8 @@ export const BarcodeScannerManager: React.FC<BarcodeScannerManagerProps> = ({
         setIsConfirmedToEdit(true);
 
         const initialSizes: Record<string, number> = {};
-        NUMERIC_SIZES.slice(0, 8).forEach(s => { initialSizes[s] = 0; });
+        const defaultSizes = getDefaultSizesArray('NUMERIC', 'M', 'Tênis Adulto Masculino');
+        defaultSizes.forEach(s => { initialSizes[s] = 0; });
 
         const newFormData = {
           barcode: clean,
@@ -330,8 +331,11 @@ export const BarcodeScannerManager: React.FC<BarcodeScannerManagerProps> = ({
     setExistingRef(null);
     setIsConfirmedToEdit(true);
 
+    const targetGender = formData.gender || 'M';
+    const targetProductType = formData.productType || 'Tênis Adulto Masculino';
+    const defaultSizes = getDefaultSizesArray('NUMERIC', targetGender, targetProductType);
     const initialSizes: Record<string, number> = {};
-    NUMERIC_SIZES.slice(0, 8).forEach(s => { initialSizes[s] = 0; });
+    defaultSizes.forEach(s => { initialSizes[s] = 0; });
 
     const activeBrand = activeLockedReference?.brand || existingRef?.brand || formData.brand || '';
     const targetMonth = (new Date().getMonth() + 1).toString().padStart(2, '0');
@@ -341,14 +345,14 @@ export const BarcodeScannerManager: React.FC<BarcodeScannerManagerProps> = ({
       barcode: scannedCode || formData.barcode || barcodeInput,
       brand: activeBrand,
       model: '',
-      productType: formData.productType || 'Tênis Adulto Masculino',
+      productType: targetProductType,
       color: '',
       arrivalMonth: targetMonth,
       arrivalYear: targetYear,
       gridType: 'NUMERIC' as SizeGridType,
       sizes: initialSizes,
       total: 0,
-      gender: formData.gender || 'M'
+      gender: targetGender
     };
 
     setFormData(newFormData);
@@ -394,7 +398,7 @@ export const BarcodeScannerManager: React.FC<BarcodeScannerManagerProps> = ({
 
   // Switch size grid type (LETTER vs NUMERIC)
   const handleGridTypeChange = (newType: SizeGridType) => {
-    const defaultSizes = newType === 'LETTER' ? LETTER_SIZES : NUMERIC_SIZES;
+    const defaultSizes = getDefaultSizesArray(newType, formData.gender, formData.productType);
     const initialSizes: Record<string, number> = {};
     defaultSizes.forEach(s => {
       initialSizes[s] = formData.sizes[s] || 0;
@@ -1138,7 +1142,11 @@ export const BarcodeScannerManager: React.FC<BarcodeScannerManagerProps> = ({
 
                         {/* Size Counter Grid */}
                         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
-                          {Object.keys(formData.sizes).map(size => {
+                          {(() => {
+                            const defaultSizes = getDefaultSizesArray(formData.gridType, formData.gender, formData.productType);
+                            const customSizes = Object.keys(formData.sizes || {}).filter(s => !defaultSizes.includes(s));
+                            return [...defaultSizes, ...customSizes];
+                          })().map(size => {
                             const qty = formData.sizes[size] || 0;
                             return (
                               <div
@@ -1484,7 +1492,11 @@ export const BarcodeScannerManager: React.FC<BarcodeScannerManagerProps> = ({
 
                       {/* Size counter grid */}
                       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
-                        {Object.keys(formData.sizes).map(size => {
+                        {(() => {
+                          const defaultSizes = getDefaultSizesArray(formData.gridType, formData.gender, formData.productType);
+                          const customSizes = Object.keys(formData.sizes || {}).filter(s => !defaultSizes.includes(s));
+                          return [...defaultSizes, ...customSizes];
+                        })().map(size => {
                           const qty = formData.sizes[size] || 0;
                           return (
                             <div

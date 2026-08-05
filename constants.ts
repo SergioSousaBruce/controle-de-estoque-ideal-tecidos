@@ -127,12 +127,14 @@ export const syncProductTypeWithGender = (currentProductType: string | undefined
   let updated = currentProductType;
   if (newGender === 'F') {
     updated = updated
+      .replace(/Infantil/gi, 'Adulto')
       .replace(/Masculino/gi, 'Feminino')
       .replace(/Masculina/gi, 'Feminina')
       .replace(/Masculinas/gi, 'Femininas')
       .replace(/Masculinos/gi, 'Femininos');
   } else if (newGender === 'M') {
     updated = updated
+      .replace(/Infantil/gi, 'Adulto')
       .replace(/Feminino/gi, 'Masculino')
       .replace(/Feminina/gi, 'Masculina')
       .replace(/Femininas/gi, 'Masculinas')
@@ -153,9 +155,28 @@ export const syncProductTypeWithGender = (currentProductType: string | undefined
       .replace(/Masculinos/gi, 'Femininos');
   }
 
-  if (PRODUCT_TYPES.includes(updated)) {
+  if (PRODUCT_TYPES.includes(updated) && getGenderFromProductType(updated) === newGender) {
     return updated;
   }
 
   return getDefaultProductTypeFromGender(newGender);
+};
+
+export const getDefaultSizesArray = (gridType?: string, gender?: string, productType?: string): string[] => {
+  if (gridType === 'LETTER') {
+    return LETTER_SIZES;
+  }
+  const isInfantil = gender === 'IM' || gender === 'IF' || (productType || '').toLowerCase().includes('infantil');
+  if (isInfantil) {
+    return NUMERIC_SIZES.filter(s => { const n = parseInt(s, 10); return n >= 14 && n <= 37; });
+  }
+  const isMasculino = gender === 'M' || (productType || '').toLowerCase().includes('masculin');
+  if (isMasculino) {
+    return NUMERIC_SIZES.filter(s => { const n = parseInt(s, 10); return n >= 34 && n <= 45; });
+  }
+  const isFeminino = gender === 'F' || (productType || '').toLowerCase().includes('feminin');
+  if (isFeminino) {
+    return NUMERIC_SIZES.filter(s => { const n = parseInt(s, 10); return n >= 33 && n <= 41; });
+  }
+  return NUMERIC_SIZES.filter(s => { const n = parseInt(s, 10); return n >= 33 && n <= 44; });
 };

@@ -1509,7 +1509,18 @@ export const ShoeInventoryManager: React.FC<ShoeInventoryManagerProps> = ({ curr
                       </div>
 
                       <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-2">
-                        {['33', '34', '35', '36', '37', '38', '39', '40', '41', '42', '43', '44'].map(sz => {
+                        {(() => {
+                          const cat = (newSessionForm.category || '').toLowerCase();
+                          let sizes = NUMERIC_SIZES.filter(s => { const n = parseInt(s, 10); return n >= 33 && n <= 45; });
+                          if (cat.includes('infantil')) {
+                            sizes = NUMERIC_SIZES.filter(s => { const n = parseInt(s, 10); return n >= 14 && n <= 37; });
+                          } else if (cat.includes('masculin')) {
+                            sizes = NUMERIC_SIZES.filter(s => { const n = parseInt(s, 10); return n >= 34 && n <= 45; });
+                          } else if (cat.includes('feminin')) {
+                            sizes = NUMERIC_SIZES.filter(s => { const n = parseInt(s, 10); return n >= 33 && n <= 41; });
+                          }
+                          return sizes;
+                        })().map(sz => {
                           const currentQty = newSessionForm.sizes[sz] || 0;
                           return (
                             <div key={sz} className={`p-3 rounded-2xl border text-center transition-all ${currentQty > 0 ? 'bg-blue-50/50 border-brand-blue' : 'bg-brand-slate border-gray-200'}`}>
@@ -1908,7 +1919,18 @@ export const ShoeInventoryManager: React.FC<ShoeInventoryManagerProps> = ({ curr
                       </div>
 
                       <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-2">
-                        {['33', '34', '35', '36', '37', '38', '39', '40', '41', '42', '43', '44'].map(sz => {
+                        {(() => {
+                          const cat = (newSessionForm.category || '').toLowerCase();
+                          let sizes = NUMERIC_SIZES.filter(s => { const n = parseInt(s, 10); return n >= 33 && n <= 45; });
+                          if (cat.includes('infantil')) {
+                            sizes = NUMERIC_SIZES.filter(s => { const n = parseInt(s, 10); return n >= 14 && n <= 37; });
+                          } else if (cat.includes('masculin')) {
+                            sizes = NUMERIC_SIZES.filter(s => { const n = parseInt(s, 10); return n >= 34 && n <= 45; });
+                          } else if (cat.includes('feminin')) {
+                            sizes = NUMERIC_SIZES.filter(s => { const n = parseInt(s, 10); return n >= 33 && n <= 41; });
+                          }
+                          return sizes;
+                        })().map(sz => {
                           const currentQty = newSessionForm.sizes[sz] || 0;
                           return (
                             <div key={sz} className={`p-3 rounded-2xl border text-center transition-all ${currentQty > 0 ? 'bg-blue-50/50 border-brand-blue' : 'bg-brand-slate border-gray-200'}`}>
