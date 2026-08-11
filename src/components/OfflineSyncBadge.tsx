@@ -29,7 +29,7 @@ export const OfflineSyncBadge: React.FC<OfflineSyncBadgeProps> = ({
 
   useEffect(() => {
     updatePendingState();
-    const interval = setInterval(updatePendingState, 2000);
+    const interval = setInterval(updatePendingState, 10000);
 
     const handleOnline = () => {
       setIsOnline(true);

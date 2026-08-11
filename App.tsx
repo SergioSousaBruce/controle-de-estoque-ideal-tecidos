@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useDeferredValue } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Package, 
@@ -19,6 +19,7 @@ import {
   Minus,
   CheckCircle2,
   AlertCircle,
+  Clock,
   LayoutGrid,
   BarChart3,
   BrainCircuit,
@@ -127,6 +128,10 @@ const App: React.FC = () => {
   const [viewingPdfItem, setViewingPdfItem] = useState<InventoryCount | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [historySort, setHistorySort] = useState<'AZ' | 'DATE'>('AZ');
+  const [historyStatusFilter, setHistoryStatusFilter] = useState<'ALL' | 'COMPLETED' | 'IN_PROGRESS'>('ALL');
+  const [historyViewType, setHistoryViewType] = useState<'BRANDS' | 'ITEMS'>('BRANDS');
+
+  const deferredSearchTerm = useDeferredValue(searchTerm);
 
   // Clean Architecture Module States
   // Delete Brand and Edit Brand Modal States
@@ -195,6 +200,7 @@ const App: React.FC = () => {
   // Brand inventory statuses state
   const [completedBrands, setCompletedBrands] = useState<Record<string, boolean>>({});
   const [brandSearchTerm, setBrandSearchTerm] = useState('');
+  const deferredBrandSearchTerm = useDeferredValue(brandSearchTerm);
   const [brandStatusFilter, setBrandStatusFilter] = useState<'ALL' | 'COMPLETED' | 'IN_PROGRESS' | 'PENDING'>('ALL');
   const [expandedBrand, setExpandedBrand] = useState<string | null>(null);
   
@@ -260,7 +266,7 @@ const App: React.FC = () => {
     }
   };
 
-  // Real-time Brand Statistics
+  // Real-time Brand Statistics (O(N + M) Ultra-optimized)
   const allBrandsList = useMemo(() => {
     const customFromCounts = counts.map(c => c.brand?.trim()).filter(Boolean) as string[];
     const set = new Set([...DEFAULT_BRANDS_LIST, ...customFromCounts]);
@@ -268,10 +274,39 @@ const App: React.FC = () => {
   }, [counts]);
 
   const brandStats = useMemo(() => {
+    // Single O(M) pass grouping by brand name
+    const countsByBrand = new Map<string, InventoryCount[]>();
+    for (let i = 0; i < counts.length; i++) {
+      const c = counts[i];
+      const bName = (c.brand || '').toLowerCase().trim();
+      if (!bName) continue;
+      let list = countsByBrand.get(bName);
+      if (!list) {
+        list = [];
+        countsByBrand.set(bName, list);
+      }
+      list.push(c);
+    }
+
     return allBrandsList.map(brandName => {
-      const brandCounts = counts.filter(c => (c.brand || '').toLowerCase().trim() === brandName.toLowerCase().trim());
-      const totalPieces = brandCounts.reduce((acc, c) => acc + c.total, 0);
-      const totalModels = new Set(brandCounts.map(c => c.model)).size;
+      const key = brandName.toLowerCase().trim();
+      const brandCounts = countsByBrand.get(key) || [];
+      
+      let totalPieces = 0;
+      let newestTime = 0;
+      const modelSet = new Set<string>();
+
+      for (let i = 0; i < brandCounts.length; i++) {
+        const item = brandCounts[i];
+        totalPieces += (item.total || 0);
+        if (item.model) modelSet.add(item.model);
+        if (item.createdAt) {
+          const t = new Date(item.createdAt).getTime();
+          if (t > newestTime) newestTime = t;
+        }
+      }
+
+      const totalModels = modelSet.size;
       const isCompleted = !!completedBrands[brandName];
       const isStarted = totalPieces > 0;
 
@@ -279,16 +314,56 @@ const App: React.FC = () => {
       if (isCompleted) status = 'COMPLETED';
       else if (isStarted) status = 'IN_PROGRESS';
 
+      let lastDateStr = '';
+      if (newestTime > 0) {
+        try {
+          lastDateStr = new Date(newestTime).toLocaleDateString('pt-BR');
+        } catch {
+          lastDateStr = '';
+        }
+      }
+
       return {
         name: brandName,
         totalPieces,
         totalModels,
         totalLots: brandCounts.length,
         status,
+        lastDateStr,
         items: brandCounts
       };
     });
   }, [allBrandsList, counts, completedBrands]);
+
+  const filteredBrandStats = useMemo(() => {
+    let list = brandStats.filter(b => b.totalPieces > 0 || b.status === 'COMPLETED');
+
+    if (historyStatusFilter === 'COMPLETED') {
+      list = list.filter(b => b.status === 'COMPLETED');
+    } else if (historyStatusFilter === 'IN_PROGRESS') {
+      list = list.filter(b => b.status === 'IN_PROGRESS');
+    }
+
+    if (deferredSearchTerm) {
+      const low = deferredSearchTerm.toLowerCase().trim();
+      list = list.filter(b => 
+        b.name.toLowerCase().includes(low) || 
+        b.items.some(i => i.model.toLowerCase().includes(low) || i.color?.toLowerCase().includes(low))
+      );
+    }
+
+    if (historySort === 'AZ') {
+      list.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+    } else {
+      list.sort((a, b) => {
+        const dateA = a.items[0]?.createdAt ? new Date(a.items[0].createdAt).getTime() : 0;
+        const dateB = b.items[0]?.createdAt ? new Date(b.items[0].createdAt).getTime() : 0;
+        return dateB - dateA;
+      });
+    }
+
+    return list;
+  }, [brandStats, historyStatusFilter, deferredSearchTerm, historySort]);
 
   const completedCount = useMemo(() => brandStats.filter(b => b.status === 'COMPLETED').length, [brandStats]);
   const inProgressCount = useMemo(() => brandStats.filter(b => b.status === 'IN_PROGRESS').length, [brandStats]);
@@ -1431,24 +1506,32 @@ const App: React.FC = () => {
   // Filtered counts
   const filteredCounts = useMemo(() => {
     let list = counts;
-    if (searchTerm) {
-      const low = searchTerm.toLowerCase();
-      list = counts.filter(c => 
-        c.productType.toLowerCase().includes(low) || 
-        c.model.toLowerCase().includes(low) || 
-        c.brand?.toLowerCase().includes(low)
+
+    // Status filter
+    if (historyStatusFilter === 'COMPLETED') {
+      list = list.filter(c => c.status === 'COMPLETED' || c.status === 'FINISHED' || !!completedBrands[c.brand || '']);
+    } else if (historyStatusFilter === 'IN_PROGRESS') {
+      list = list.filter(c => c.status !== 'COMPLETED' && c.status !== 'FINISHED' && !completedBrands[c.brand || '']);
+    }
+
+    if (deferredSearchTerm) {
+      const low = deferredSearchTerm.toLowerCase();
+      list = list.filter(c => 
+        (c.productType && c.productType.toLowerCase().includes(low)) || 
+        (c.model && c.model.toLowerCase().includes(low)) || 
+        (c.brand && c.brand.toLowerCase().includes(low)) ||
+        (c.color && c.color.toLowerCase().includes(low))
       );
     }
 
-    // Deduplicate identical items to prevent repeating duplicate cards in the list
+    // Keep all recorded counts by document ID
     const uniqueList: InventoryCount[] = [];
-    const seenKeys = new Set<string>();
+    const seenIds = new Set<string>();
 
-    for (const item of list) {
-      const sizesStr = JSON.stringify(item.sizes || {});
-      const key = `${(item.brand || '').toLowerCase().trim()}_${(item.model || '').toLowerCase().trim()}_${(item.color || '').toLowerCase().trim()}_${item.arrivalMonth}_${item.arrivalYear}_${item.total}_${sizesStr}`;
-      if (!seenKeys.has(key)) {
-        seenKeys.add(key);
+    for (let i = 0; i < list.length; i++) {
+      const item = list[i];
+      if (!seenIds.has(item.id)) {
+        seenIds.add(item.id);
         uniqueList.push(item);
       }
     }
@@ -1465,12 +1548,12 @@ const App: React.FC = () => {
       });
     } else {
       uniqueList.sort((a, b) => {
-        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+        return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
       });
     }
 
     return uniqueList;
-  }, [counts, searchTerm, historySort]);
+  }, [counts, deferredSearchTerm, historySort, historyStatusFilter, completedBrands]);
 
   // Brand size turnover analysis
   const brandAnalysis = useMemo(() => {
@@ -1804,6 +1887,78 @@ const App: React.FC = () => {
                   </div>
 
                   <div className="flex items-center gap-2 flex-wrap">
+                    {/* View Type Toggle: Por Marca vs Por Lote */}
+                    <div className="flex items-center bg-brand-dark/10 p-1 rounded-2xl border border-brand-dark/10 text-[10px] font-black shadow-2xs">
+                      <button
+                        type="button"
+                        onClick={() => setHistoryViewType('BRANDS')}
+                        className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1 ${
+                          historyViewType === 'BRANDS'
+                            ? 'bg-brand-dark text-white shadow-xs'
+                            : 'text-gray-600 hover:text-brand-dark'
+                        }`}
+                        title="Exibir resumo das marcas no histórico"
+                      >
+                        <LayoutGrid size={12} />
+                        Por Marca ({filteredBrandStats.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setHistoryViewType('ITEMS')}
+                        className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1 ${
+                          historyViewType === 'ITEMS'
+                            ? 'bg-brand-dark text-white shadow-xs'
+                            : 'text-gray-600 hover:text-brand-dark'
+                        }`}
+                        title="Exibir lotes individuais"
+                      >
+                        <Package size={12} />
+                        Por Lote ({counts.length})
+                      </button>
+                    </div>
+
+                    {/* Status Filter Selector */}
+                    <div className="flex items-center bg-gray-100/80 p-1 rounded-2xl border border-gray-200/80 text-[10px] font-black shadow-2xs">
+                      <button
+                        type="button"
+                        onClick={() => setHistoryStatusFilter('ALL')}
+                        className={`px-3 py-1.5 rounded-xl transition-all ${
+                          historyStatusFilter === 'ALL' 
+                            ? 'bg-brand-dark text-white shadow-xs' 
+                            : 'text-gray-500 hover:text-brand-dark'
+                        }`}
+                        title="Exibir todas as contagens (concluídas e em andamento)"
+                      >
+                        Todas
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setHistoryStatusFilter('COMPLETED')}
+                        className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1 ${
+                          historyStatusFilter === 'COMPLETED' 
+                            ? 'bg-emerald-600 text-white shadow-xs' 
+                            : 'text-gray-500 hover:text-emerald-700'
+                        }`}
+                        title="Exibir apenas contagens concluídas"
+                      >
+                        <CheckCircle2 size={11} />
+                        Concluídas
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setHistoryStatusFilter('IN_PROGRESS')}
+                        className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1 ${
+                          historyStatusFilter === 'IN_PROGRESS' 
+                            ? 'bg-amber-500 text-white shadow-xs' 
+                            : 'text-gray-500 hover:text-amber-700'
+                        }`}
+                        title="Exibir contagens em andamento"
+                      >
+                        <Clock size={11} />
+                        Em Andamento
+                      </button>
+                    </div>
+
                     {/* Sort Selector */}
                     <div className="flex items-center bg-gray-100/80 p-1 rounded-2xl border border-gray-200/80 text-[10px] font-black shadow-2xs">
                       <button
@@ -1817,7 +1972,7 @@ const App: React.FC = () => {
                         title="Organizar marcas em ordem alfabética (A-Z)"
                       >
                         <ArrowUpDown size={12} />
-                        Ordem Alfabética A-Z
+                        A-Z
                       </button>
                       <button
                         type="button"
@@ -1845,7 +2000,249 @@ const App: React.FC = () => {
                   </div>
                 </div>
 
-              {filteredCounts.length === 0 ? (
+              {historyViewType === 'BRANDS' ? (
+                filteredBrandStats.length === 0 ? (
+                  <motion.div 
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="text-center py-20 px-8 bg-white rounded-[2.5rem] border border-dashed border-gray-100 space-y-4 shadow-sm"
+                  >
+                    <div className="bg-brand-slate w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-2">
+                      <Package size={32} className="text-gray-200" />
+                    </div>
+                    <div>
+                      <p className="text-brand-dark font-display font-bold text-lg leading-tight">Nenhuma marca encontrada</p>
+                      <p className="text-gray-400 text-sm">Nenhum lançamento registrado ou os filtros selecionados não retornaram marcas.</p>
+                    </div>
+                  </motion.div>
+                ) : (
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-5">
+                    {filteredBrandStats.map(brand => {
+                      const isExpanded = expandedBrand === brand.name;
+                      return (
+                        <div 
+                          key={brand.name}
+                          className={`bg-white rounded-3xl p-5 border transition-all shadow-sm space-y-4 ${
+                            brand.status === 'COMPLETED' 
+                              ? 'border-emerald-200/80 bg-gradient-to-r from-emerald-50/30 to-white' 
+                              : brand.status === 'IN_PROGRESS'
+                                ? 'border-blue-200 bg-gradient-to-r from-blue-50/20 to-white'
+                                : 'border-gray-100'
+                          }`}
+                        >
+                          {/* Header: Brand Name, Status Badge & Trash Delete Brand */}
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2 mb-1.5 flex-wrap">
+                                <h4 className="text-xl sm:text-2xl font-display font-black text-brand-dark uppercase tracking-tight truncate">
+                                  {brand.name}
+                                </h4>
+                                
+                                {/* Status Badge */}
+                                {brand.status === 'COMPLETED' && (
+                                  <span className="px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-800 border border-emerald-200 flex items-center gap-1 shrink-0">
+                                    <CheckCircle2 size={12} /> CONCLUÍDA
+                                  </span>
+                                )}
+                                {brand.status === 'IN_PROGRESS' && (
+                                  <span className="px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider bg-blue-100 text-blue-800 border border-blue-200 flex items-center gap-1 shrink-0">
+                                    ⏳ Em Contagem ({brand.totalPieces} pcs)
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* Stats Pills */}
+                              <div className="flex items-center gap-2 text-xs font-bold text-gray-600 flex-wrap pt-0.5">
+                                <span className="bg-gray-100/90 text-brand-dark px-3 py-1.5 rounded-xl whitespace-nowrap border border-gray-200/50">
+                                  <strong className="text-brand-blue font-black">{brand.totalPieces}</strong> peças total
+                                </span>
+                                <span className="bg-gray-100/90 text-brand-dark px-3 py-1.5 rounded-xl whitespace-nowrap border border-gray-200/50">
+                                  <strong className="text-brand-blue font-black">{brand.totalModels}</strong> modelos
+                                </span>
+                                <span className="bg-gray-100/90 text-brand-dark px-3 py-1.5 rounded-xl whitespace-nowrap border border-gray-200/50">
+                                  <strong className="text-brand-blue font-black">{brand.totalLots}</strong> lotes
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* Top Right Quick Delete Icon */}
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteBrand(brand.name, brand.totalLots, brand.totalPieces)}
+                              title={`Excluir a marca ${brand.name}`}
+                              className="p-2.5 text-gray-400 hover:text-rose-600 hover:bg-rose-50 rounded-2xl active:scale-90 transition-all border border-transparent hover:border-rose-100 shrink-0"
+                            >
+                              <Trash2 size={20} strokeWidth={2.2} />
+                            </button>
+                          </div>
+
+                          {/* Action Buttons Row */}
+                          <div className="flex items-center gap-2 flex-wrap pt-2 border-t border-gray-100">
+                            {/* PRÉ-VISUALIZAR */}
+                            {brand.items.length > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => setViewingBrandPreview({ brandName: brand.name, items: brand.items })}
+                                title={`Pré-visualizar contagem geral da marca ${brand.name}`}
+                                className="p-2.5 px-3.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-2xl font-black text-xs flex items-center gap-1.5 border border-indigo-200 shadow-xs active:scale-95 transition-all"
+                              >
+                                <Eye size={16} strokeWidth={2.5} />
+                                <span className="text-[10px] uppercase tracking-wider">
+                                  PRÉ-VISUALIZAR
+                                </span>
+                              </button>
+                            )}
+
+                            {/* EDITAR / ATUALIZAR */}
+                            <button
+                              type="button"
+                              onClick={() => setBrandEditModal({ isOpen: true, brandName: brand.name })}
+                              title={`Editar ou atualizar números da marca ${brand.name}`}
+                              className="p-2.5 px-3.5 bg-amber-50 hover:bg-amber-100 text-amber-800 rounded-2xl font-black text-xs flex items-center gap-1.5 border border-amber-200 shadow-xs active:scale-95 transition-all"
+                            >
+                              <Edit2 size={16} strokeWidth={2.5} />
+                              <span className="text-[10px] uppercase tracking-wider">
+                                EDITAR / ATUALIZAR
+                              </span>
+                            </button>
+
+                            {/* VER LOTES */}
+                            {brand.items.length > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => setExpandedBrand(isExpanded ? null : brand.name)}
+                                title={`Ver lotes de ${brand.name}`}
+                                className="p-2.5 px-3.5 bg-blue-50 hover:bg-blue-100 text-brand-blue rounded-2xl font-black text-xs flex items-center gap-1.5 border border-blue-200 shadow-xs active:scale-95 transition-all"
+                              >
+                                <Eye size={16} strokeWidth={2.5} />
+                                <span className="text-[10px] uppercase tracking-wider">
+                                  {isExpanded ? 'Ocultar Lotes' : 'VER LOTES'}
+                                </span>
+                              </button>
+                            )}
+
+                            {/* PDF */}
+                            {brand.items.length > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => generateBrandPDF(brand.name, brand.items)}
+                                title={`Baixar PDF da marca ${brand.name}`}
+                                className="p-2.5 px-3.5 bg-red-50 hover:bg-red-100 text-brand-red rounded-2xl font-black text-xs flex items-center gap-1.5 border border-red-200 shadow-xs active:scale-95 transition-all"
+                              >
+                                <Download size={16} strokeWidth={2.5} />
+                                <span className="text-[10px] uppercase tracking-wider">
+                                  PDF
+                                </span>
+                              </button>
+                            )}
+
+                            {/* CONCLUÍDA */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                toggleBrandCompleted(brand.name);
+                                showToast(
+                                  completedBrands[brand.name] 
+                                    ? `Marca ${brand.name} reaberta` 
+                                    : `Marca ${brand.name} concluída!`,
+                                  'success'
+                                );
+                              }}
+                              title={completedBrands[brand.name] ? 'Reabrir contagem' : 'Marcar como Concluída'}
+                              className={`p-2.5 px-3.5 rounded-2xl border font-black text-xs flex items-center gap-1.5 transition-all ${
+                                completedBrands[brand.name]
+                                  ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
+                                  : 'bg-gray-50 hover:bg-emerald-50 text-gray-600 hover:text-emerald-700 border-gray-200'
+                              }`}
+                            >
+                              <CheckCircle2 size={16} strokeWidth={2.5} />
+                              <span className="text-[10px] uppercase tracking-wider">
+                                {completedBrands[brand.name] ? 'CONCLUÍDA' : 'CONCLUIR'}
+                              </span>
+                            </button>
+
+                            {/* + CONTAR */}
+                            <button
+                              type="button"
+                              onClick={() => handleStartWithSameBrand(brand.name)}
+                              className="p-2.5 px-3.5 bg-brand-dark hover:bg-black text-white rounded-2xl font-black text-xs flex items-center gap-1.5 shadow-md active:scale-95 transition-all ml-auto"
+                              title={`Contar ${brand.name}`}
+                            >
+                              <Plus size={16} strokeWidth={3} />
+                              <span className="text-[10px] uppercase tracking-wider">+ CONTAR</span>
+                            </button>
+                          </div>
+
+                          {/* Accordion list of lot items if expanded */}
+                          {isExpanded && brand.items.length > 0 && (
+                            <div className="pt-3 border-t border-gray-100 space-y-2 bg-gray-50/50 p-3 rounded-2xl">
+                              <div className="flex justify-between items-center text-[10px] font-black uppercase text-gray-400 px-1">
+                                <span>Lotes Registrados ({brand.items.length})</span>
+                                <span>Ações</span>
+                              </div>
+                              <div className="grid gap-2">
+                                {brand.items.map(item => (
+                                  <div key={item.id} className="bg-white p-3 rounded-xl border border-gray-200/60 flex items-center justify-between gap-2 shadow-2xs">
+                                    <div className="min-w-0">
+                                      <p className="font-bold text-xs text-brand-dark truncate">
+                                        {item.model || 'Sem modelo'} - {item.color || 'Sem cor'}
+                                      </p>
+                                      <p className="text-[10px] text-gray-500 font-medium">
+                                        {item.gender ? `Gênero: ${item.gender} | ` : ''}
+                                        {item.arrivalMonth}/{item.arrivalYear} - <strong className="text-brand-blue">{item.total} pares</strong>
+                                      </p>
+                                    </div>
+                                    <div className="flex gap-1.5 shrink-0">
+                                      <button
+                                        type="button"
+                                        onClick={() => setViewingPdfItem(item)}
+                                        className="p-1.5 bg-gray-100 hover:bg-brand-blue hover:text-white rounded-lg text-gray-600 transition-colors"
+                                        title="Comprovante"
+                                      >
+                                        <FileText size={14} />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleEdit(item)}
+                                        className="p-1.5 bg-gray-100 hover:bg-amber-500 hover:text-white rounded-lg text-gray-600 transition-colors"
+                                        title="Editar"
+                                      >
+                                        <Edit2 size={14} />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleDelete(item.id)}
+                                        className="p-1.5 bg-red-50 hover:bg-brand-red hover:text-white rounded-lg text-red-500 transition-colors"
+                                        title="Excluir lote"
+                                      >
+                                        <Trash2 size={14} />
+                                      </button>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Footer with last launch date & Excluir Marca link */}
+                          <div className="flex items-center justify-between text-[11px] text-gray-400 font-bold pt-1 border-t border-gray-50">
+                            <span>{brand.lastDateStr ? `Último lançamento: ${brand.lastDateStr}` : 'Nenhum lançamento recente'}</span>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteBrand(brand.name, brand.totalLots, brand.totalPieces)}
+                              className="text-rose-500 hover:text-rose-700 flex items-center gap-1 text-[10px] font-black uppercase tracking-wider hover:underline"
+                            >
+                              <Trash2 size={12} />
+                              EXCLUIR MARCA
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )
+              ) : (
+                filteredCounts.length === 0 ? (
                   <motion.div 
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
@@ -1860,7 +2257,7 @@ const App: React.FC = () => {
                     </div>
                   </motion.div>
                 ) : (
-                  <div className="grid gap-6">
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
                     {filteredCounts.map((item, index) => (
                       <motion.div 
                         key={item.id} 
@@ -1911,7 +2308,7 @@ const App: React.FC = () => {
                             </div>
                           </div>
 
-                          {/* Middle row: Brand (Bold) and Model / Details */}
+                          {/* Middle row: Brand (Bold), Gender & Completion Status */}
                           <div className="space-y-1">
                             <h3 className="font-display font-black text-brand-dark text-2xl leading-tight tracking-tight uppercase flex flex-wrap items-center gap-2">
                               <span>{item.brand || item.model || 'SEM MARCA'}</span>
@@ -1925,6 +2322,29 @@ const App: React.FC = () => {
                                   {item.gender === 'M' ? 'Masc' : item.gender === 'F' ? 'Fem' : item.gender === 'IM' ? 'Inf.M' : 'Inf.F'}
                                 </span>
                               )}
+
+                              {(() => {
+                                const isCompleted = item.status === 'COMPLETED' || item.status === 'FINISHED' || !!completedBrands[item.brand || ''];
+                                return (
+                                  <span className={`text-[10px] px-2.5 py-0.5 rounded-full font-black uppercase tracking-wider flex items-center gap-1 ${
+                                    isCompleted 
+                                      ? 'bg-emerald-50 text-emerald-700 border border-emerald-200/80' 
+                                      : 'bg-amber-50 text-amber-700 border border-amber-200/80'
+                                  }`}>
+                                    {isCompleted ? (
+                                      <>
+                                        <CheckCircle2 size={11} className="text-emerald-600" />
+                                        Concluída
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Clock size={11} className="text-amber-600" />
+                                        Em Andamento
+                                      </>
+                                    )}
+                                  </span>
+                                );
+                              })()}
                             </h3>
                             <div className="flex flex-wrap items-center gap-2 text-xs font-bold text-gray-400 uppercase tracking-wider">
                               {item.model && <span>{item.model}</span>}
@@ -1967,9 +2387,10 @@ const App: React.FC = () => {
                       </motion.div>
                     ))}
                   </div>
-                )}
-              </div>
-            </motion.div>
+                )
+              )}
+            </div>
+          </motion.div>
           )}
 
           {currentView === AppView.IDENTIFY && (
@@ -3386,38 +3807,46 @@ const App: React.FC = () => {
       </footer>
 
        {/* FIXED FOOTER NAVIGATION (No Print) */}
-      <nav className="no-print fixed bottom-0 left-0 right-0 max-w-lg mx-auto p-4 z-50" style={{ paddingBottom: 'calc(1rem + env(safe-area-inset-bottom, 0px))' }}>
+      <nav className="no-print fixed bottom-0 left-0 right-0 max-w-lg sm:max-w-xl md:max-w-2xl mx-auto p-3 sm:p-4 z-50" style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom, 0px))' }}>
         <div className="bg-brand-blue/95 backdrop-blur-xl rounded-[2.5rem] p-2 flex gap-1 shadow-2xl shadow-brand-blue/40 border border-white/10">
           <button 
             onClick={() => setCurrentView(AppView.HOME)}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-4 rounded-[1.8rem] transition-all duration-500 ${currentView === AppView.HOME ? 'bg-white text-brand-blue shadow-xl' : 'text-white/40 hover:text-white'}`}
+            className={`flex-1 flex items-center justify-center gap-1.5 py-3.5 sm:py-4 rounded-[1.8rem] transition-all duration-500 ${currentView === AppView.HOME ? 'bg-white text-brand-blue shadow-xl' : 'text-white/40 hover:text-white'}`}
           >
             <Home size={18} fill={currentView === AppView.HOME ? "currentColor" : "none"} />
-            <span className="text-[9px] font-black uppercase tracking-wider leading-none">Início</span>
+            <span className="text-[9px] sm:text-[10px] font-black uppercase tracking-wider leading-none">Início</span>
           </button>
 
           <button 
             onClick={() => setCurrentView(AppView.INVENTORIES)}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-4 rounded-[1.8rem] transition-all duration-500 ${currentView === AppView.INVENTORIES ? 'bg-white text-brand-blue shadow-xl' : 'text-white/40 hover:text-white'}`}
+            className={`flex-1 flex items-center justify-center gap-1.5 py-3.5 sm:py-4 rounded-[1.8rem] transition-all duration-500 ${currentView === AppView.INVENTORIES ? 'bg-white text-brand-blue shadow-xl' : 'text-white/40 hover:text-white'}`}
           >
             <ClipboardList size={18} />
-            <span className="text-[9px] font-black uppercase tracking-wider leading-none">Marcas</span>
+            <span className="text-[9px] sm:text-[10px] font-black uppercase tracking-wider leading-none">Marcas</span>
           </button>
           
           <button 
             onClick={() => setCurrentView(AppView.ANALYTICS)}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-4 rounded-[1.8rem] transition-all duration-500 ${currentView === AppView.ANALYTICS ? 'bg-white text-brand-blue shadow-xl' : 'text-white/40 hover:text-white'}`}
+            className={`flex-1 flex items-center justify-center gap-1.5 py-3.5 sm:py-4 rounded-[1.8rem] transition-all duration-500 ${currentView === AppView.ANALYTICS ? 'bg-white text-brand-blue shadow-xl' : 'text-white/40 hover:text-white'}`}
           >
             <BrainCircuit size={18} />
-            <span className="text-[9px] font-black uppercase tracking-wider leading-none">Análise</span>
+            <span className="text-[9px] sm:text-[10px] font-black uppercase tracking-wider leading-none">Análise</span>
+          </button>
+
+          <button 
+            onClick={() => setCurrentView(AppView.DASHBOARD)}
+            className={`flex-1 flex items-center justify-center gap-1.5 py-3.5 sm:py-4 rounded-[1.8rem] transition-all duration-500 ${currentView === AppView.DASHBOARD ? 'bg-white text-brand-blue shadow-xl' : 'text-white/40 hover:text-white'}`}
+          >
+            <BarChart3 size={18} />
+            <span className="text-[9px] sm:text-[10px] font-black uppercase tracking-wider leading-none">Dashboard</span>
           </button>
 
           <button 
             onClick={generatePDF}
-            className="flex-1 flex items-center justify-center gap-1.5 py-4 rounded-[1.8rem] text-white/40 hover:text-white hover:bg-white/5 transition-all duration-300"
+            className="flex-1 flex items-center justify-center gap-1.5 py-3.5 sm:py-4 rounded-[1.8rem] text-white/40 hover:text-white hover:bg-white/5 transition-all duration-300"
           >
             <Download size={18} />
-            <span className="text-[9px] font-black uppercase tracking-wider leading-none">PDF</span>
+            <span className="text-[9px] sm:text-[10px] font-black uppercase tracking-wider leading-none">PDF</span>
           </button>
         </div>
       </nav>
