@@ -96,6 +96,9 @@ import { AppView, InventoryCount, SizeGridType, ShoeProduct, ShoeInventory } fro
 import { PRODUCT_TYPES, LETTER_SIZES, NUMERIC_SIZES, MONTHS, YEARS, getGenderFromProductType, getDefaultProductTypeFromGender, syncProductTypeWithGender, getDefaultSizesArray } from './constants';
 import { DEFAULT_BRANDS_LIST } from './src/services/inventoryDb';
 import { computeBrandSizeAnalysis } from './src/utils/brandAnalysis';
+import { SizeGridRow } from './src/components/SizeGridRow';
+import { InventoryItemCard } from './src/components/InventoryItemCard';
+import { BrandStatCard, BrandStat } from './src/components/BrandStatCard';
 
 const App: React.FC = () => {
   // Auth state
@@ -743,7 +746,7 @@ const App: React.FC = () => {
     setCurrentView(AppView.IDENTIFY);
   };
 
-  const handleStartWithSameBrand = (brandName: string) => {
+  const handleStartWithSameBrand = useCallback((brandName: string) => {
     const brandCounts = counts.filter(
       c => (c.brand || '').toLowerCase().trim() === brandName.toLowerCase().trim()
     );
@@ -775,7 +778,7 @@ const App: React.FC = () => {
     setEditingId(null);
     setAuthError(null);
     setCurrentView(AppView.IDENTIFY);
-  };
+  }, [counts, lastShoeInfo]);
 
   const handleSaveAndScanNextReference = async () => {
     const currentBrand = formData.brand || activeLockedReference?.brand || '';
@@ -803,15 +806,15 @@ const App: React.FC = () => {
     }
   };
 
-  const handleEdit = (count: InventoryCount) => {
+  const handleEdit = useCallback((count: InventoryCount) => {
     setFormData({ ...count });
     setEditingId(count.id);
     setCurrentView(AppView.IDENTIFY);
-  };
+  }, []);
 
-  const handleDelete = (id: string | 'ALL') => {
+  const handleDelete = useCallback((id: string | 'ALL') => {
     setDeleteModal({ isOpen: true, id });
-  };
+  }, []);
 
   const confirmDelete = async () => {
     const targetUserId = currentUserId;
@@ -877,9 +880,9 @@ const App: React.FC = () => {
     }
   };
 
-  const handleDeleteBrand = (brandName: string, count: number, pieces: number) => {
+  const handleDeleteBrand = useCallback((brandName: string, count: number, pieces: number) => {
     setDeleteBrandModal({ isOpen: true, brandName, count, pieces });
-  };
+  }, []);
 
   const confirmDeleteBrand = async () => {
     const brandToDelete = deleteBrandModal.brandName;
@@ -916,7 +919,7 @@ const App: React.FC = () => {
     }
   };
 
-  const handleUpdateItemQuantity = async (itemId: string, newTotal: number) => {
+  const handleUpdateItemQuantity = useCallback(async (itemId: string, newTotal: number) => {
     if (newTotal < 0) return;
     const targetItem = counts.find(c => c.id === itemId);
     if (!targetItem) return;
@@ -932,7 +935,7 @@ const App: React.FC = () => {
       console.error("Error updating item quantity:", err);
       showToast('Erro ao atualizar quantidade no servidor.', 'error');
     }
-  };
+  }, [counts]);
 
   const handleAddCustomSize = () => {
     const size = newSizeInput.trim().toUpperCase();
@@ -1008,7 +1011,7 @@ const App: React.FC = () => {
     }
   };
 
-  const updateSizeCount = (size: string, value: string | number) => {
+  const updateSizeCount = useCallback((size: string, value: string | number) => {
     const num = typeof value === 'string' ? parseInt(value, 10) : value;
     const cleanNum = Math.max(0, isNaN(num) ? 0 : num);
     
@@ -1017,12 +1020,43 @@ const App: React.FC = () => {
       const newTotal = Object.values(newSizes).reduce((sum: number, val: any) => sum + (val || 0), 0);
       return { ...prev, sizes: newSizes, total: newTotal };
     });
-  };
+  }, []);
 
-  const adjustSizeCount = (size: string, delta: number) => {
-    const current = formData.sizes?.[size] || 0;
-    updateSizeCount(size, current + delta);
-  };
+  const adjustSizeCount = useCallback((size: string, delta: number) => {
+    setFormData(prev => {
+      const current = prev.sizes?.[size] || 0;
+      const cleanNum = Math.max(0, current + delta);
+      const newSizes = { ...(prev.sizes || {}), [size]: cleanNum };
+      const newTotal = Object.values(newSizes).reduce((sum: number, val: any) => sum + (val || 0), 0);
+      return { ...prev, sizes: newSizes, total: newTotal };
+    });
+  }, []);
+
+  const handleToggleBrandCompletion = useCallback((brandName: string) => {
+    toggleBrandCompleted(brandName);
+    showToast(
+      completedBrands[brandName] 
+        ? `Marca ${brandName} reaberta` 
+        : `Marca ${brandName} concluída!`,
+      'success'
+    );
+  }, [toggleBrandCompleted, completedBrands]);
+
+  const handleViewPdf = useCallback((item: InventoryCount) => {
+    setViewingPdfItem(item);
+  }, []);
+
+  const handleViewBrandPreview = useCallback((data: { brandName: string; items: InventoryCount[] }) => {
+    setViewingBrandPreview(data);
+  }, []);
+
+  const handleEditBrand = useCallback((brandName: string) => {
+    setBrandEditModal({ isOpen: true, brandName });
+  }, []);
+
+  const handleToggleExpandBrand = useCallback((brandName: string) => {
+    setExpandedBrand(prev => prev === brandName ? null : brandName);
+  }, []);
 
   const saveInventory = async (): Promise<InventoryCount | null> => {
     if (isSaving) return null;
@@ -1252,7 +1286,7 @@ const App: React.FC = () => {
     doc.save(fileName);
   };
 
-  const generateBrandPDF = (brandName: string, brandItems: InventoryCount[]) => {
+  const generateBrandPDF = useCallback((brandName: string, brandItems: InventoryCount[]) => {
     if (!brandItems || brandItems.length === 0) {
       showToast(`A marca ${brandName} ainda não possui contagens registradas.`, 'error');
       return;
@@ -1345,7 +1379,11 @@ const App: React.FC = () => {
     const fileName = `Relatorio_Marca_${safeBrandName}_${dateStr.replace(/\//g, '-')}.pdf`;
     doc.save(fileName);
     showToast(`PDF da marca ${brandName} baixado com sucesso!`, 'success');
-  };
+  }, []);
+
+  const handleGenerateBrandPdf = useCallback((brandName: string, items: InventoryCount[]) => {
+    generateBrandPDF(brandName, items);
+  }, [generateBrandPDF]);
 
   const generatePDF = () => {
     const doc = new jsPDF();
@@ -2017,228 +2055,24 @@ const App: React.FC = () => {
                   </motion.div>
                 ) : (
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-5">
-                    {filteredBrandStats.map(brand => {
-                      const isExpanded = expandedBrand === brand.name;
-                      return (
-                        <div 
-                          key={brand.name}
-                          className={`bg-white rounded-3xl p-5 border transition-all shadow-sm space-y-4 ${
-                            brand.status === 'COMPLETED' 
-                              ? 'border-emerald-200/80 bg-gradient-to-r from-emerald-50/30 to-white' 
-                              : brand.status === 'IN_PROGRESS'
-                                ? 'border-blue-200 bg-gradient-to-r from-blue-50/20 to-white'
-                                : 'border-gray-100'
-                          }`}
-                        >
-                          {/* Header: Brand Name, Status Badge & Trash Delete Brand */}
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-                                <h4 className="text-xl sm:text-2xl font-display font-black text-brand-dark uppercase tracking-tight truncate">
-                                  {brand.name}
-                                </h4>
-                                
-                                {/* Status Badge */}
-                                {brand.status === 'COMPLETED' && (
-                                  <span className="px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-800 border border-emerald-200 flex items-center gap-1 shrink-0">
-                                    <CheckCircle2 size={12} /> CONCLUÍDA
-                                  </span>
-                                )}
-                                {brand.status === 'IN_PROGRESS' && (
-                                  <span className="px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider bg-blue-100 text-blue-800 border border-blue-200 flex items-center gap-1 shrink-0">
-                                    ⏳ Em Contagem ({brand.totalPieces} pcs)
-                                  </span>
-                                )}
-                              </div>
-
-                              {/* Stats Pills */}
-                              <div className="flex items-center gap-2 text-xs font-bold text-gray-600 flex-wrap pt-0.5">
-                                <span className="bg-gray-100/90 text-brand-dark px-3 py-1.5 rounded-xl whitespace-nowrap border border-gray-200/50">
-                                  <strong className="text-brand-blue font-black">{brand.totalPieces}</strong> peças total
-                                </span>
-                                <span className="bg-gray-100/90 text-brand-dark px-3 py-1.5 rounded-xl whitespace-nowrap border border-gray-200/50">
-                                  <strong className="text-brand-blue font-black">{brand.totalModels}</strong> modelos
-                                </span>
-                                <span className="bg-gray-100/90 text-brand-dark px-3 py-1.5 rounded-xl whitespace-nowrap border border-gray-200/50">
-                                  <strong className="text-brand-blue font-black">{brand.totalLots}</strong> lotes
-                                </span>
-                              </div>
-                            </div>
-
-                            {/* Top Right Quick Delete Icon */}
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteBrand(brand.name, brand.totalLots, brand.totalPieces)}
-                              title={`Excluir a marca ${brand.name}`}
-                              className="p-2.5 text-gray-400 hover:text-rose-600 hover:bg-rose-50 rounded-2xl active:scale-90 transition-all border border-transparent hover:border-rose-100 shrink-0"
-                            >
-                              <Trash2 size={20} strokeWidth={2.2} />
-                            </button>
-                          </div>
-
-                          {/* Action Buttons Row */}
-                          <div className="flex items-center gap-2 flex-wrap pt-2 border-t border-gray-100">
-                            {/* PRÉ-VISUALIZAR */}
-                            {brand.items.length > 0 && (
-                              <button
-                                type="button"
-                                onClick={() => setViewingBrandPreview({ brandName: brand.name, items: brand.items })}
-                                title={`Pré-visualizar contagem geral da marca ${brand.name}`}
-                                className="p-2.5 px-3.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-2xl font-black text-xs flex items-center gap-1.5 border border-indigo-200 shadow-xs active:scale-95 transition-all"
-                              >
-                                <Eye size={16} strokeWidth={2.5} />
-                                <span className="text-[10px] uppercase tracking-wider">
-                                  PRÉ-VISUALIZAR
-                                </span>
-                              </button>
-                            )}
-
-                            {/* EDITAR / ATUALIZAR */}
-                            <button
-                              type="button"
-                              onClick={() => setBrandEditModal({ isOpen: true, brandName: brand.name })}
-                              title={`Editar ou atualizar números da marca ${brand.name}`}
-                              className="p-2.5 px-3.5 bg-amber-50 hover:bg-amber-100 text-amber-800 rounded-2xl font-black text-xs flex items-center gap-1.5 border border-amber-200 shadow-xs active:scale-95 transition-all"
-                            >
-                              <Edit2 size={16} strokeWidth={2.5} />
-                              <span className="text-[10px] uppercase tracking-wider">
-                                EDITAR / ATUALIZAR
-                              </span>
-                            </button>
-
-                            {/* VER LOTES */}
-                            {brand.items.length > 0 && (
-                              <button
-                                type="button"
-                                onClick={() => setExpandedBrand(isExpanded ? null : brand.name)}
-                                title={`Ver lotes de ${brand.name}`}
-                                className="p-2.5 px-3.5 bg-blue-50 hover:bg-blue-100 text-brand-blue rounded-2xl font-black text-xs flex items-center gap-1.5 border border-blue-200 shadow-xs active:scale-95 transition-all"
-                              >
-                                <Eye size={16} strokeWidth={2.5} />
-                                <span className="text-[10px] uppercase tracking-wider">
-                                  {isExpanded ? 'Ocultar Lotes' : 'VER LOTES'}
-                                </span>
-                              </button>
-                            )}
-
-                            {/* PDF */}
-                            {brand.items.length > 0 && (
-                              <button
-                                type="button"
-                                onClick={() => generateBrandPDF(brand.name, brand.items)}
-                                title={`Baixar PDF da marca ${brand.name}`}
-                                className="p-2.5 px-3.5 bg-red-50 hover:bg-red-100 text-brand-red rounded-2xl font-black text-xs flex items-center gap-1.5 border border-red-200 shadow-xs active:scale-95 transition-all"
-                              >
-                                <Download size={16} strokeWidth={2.5} />
-                                <span className="text-[10px] uppercase tracking-wider">
-                                  PDF
-                                </span>
-                              </button>
-                            )}
-
-                            {/* CONCLUÍDA */}
-                            <button
-                              type="button"
-                              onClick={() => {
-                                toggleBrandCompleted(brand.name);
-                                showToast(
-                                  completedBrands[brand.name] 
-                                    ? `Marca ${brand.name} reaberta` 
-                                    : `Marca ${brand.name} concluída!`,
-                                  'success'
-                                );
-                              }}
-                              title={completedBrands[brand.name] ? 'Reabrir contagem' : 'Marcar como Concluída'}
-                              className={`p-2.5 px-3.5 rounded-2xl border font-black text-xs flex items-center gap-1.5 transition-all ${
-                                completedBrands[brand.name]
-                                  ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
-                                  : 'bg-gray-50 hover:bg-emerald-50 text-gray-600 hover:text-emerald-700 border-gray-200'
-                              }`}
-                            >
-                              <CheckCircle2 size={16} strokeWidth={2.5} />
-                              <span className="text-[10px] uppercase tracking-wider">
-                                {completedBrands[brand.name] ? 'CONCLUÍDA' : 'CONCLUIR'}
-                              </span>
-                            </button>
-
-                            {/* + CONTAR */}
-                            <button
-                              type="button"
-                              onClick={() => handleStartWithSameBrand(brand.name)}
-                              className="p-2.5 px-3.5 bg-brand-dark hover:bg-black text-white rounded-2xl font-black text-xs flex items-center gap-1.5 shadow-md active:scale-95 transition-all ml-auto"
-                              title={`Contar ${brand.name}`}
-                            >
-                              <Plus size={16} strokeWidth={3} />
-                              <span className="text-[10px] uppercase tracking-wider">+ CONTAR</span>
-                            </button>
-                          </div>
-
-                          {/* Accordion list of lot items if expanded */}
-                          {isExpanded && brand.items.length > 0 && (
-                            <div className="pt-3 border-t border-gray-100 space-y-2 bg-gray-50/50 p-3 rounded-2xl">
-                              <div className="flex justify-between items-center text-[10px] font-black uppercase text-gray-400 px-1">
-                                <span>Lotes Registrados ({brand.items.length})</span>
-                                <span>Ações</span>
-                              </div>
-                              <div className="grid gap-2">
-                                {brand.items.map(item => (
-                                  <div key={item.id} className="bg-white p-3 rounded-xl border border-gray-200/60 flex items-center justify-between gap-2 shadow-2xs">
-                                    <div className="min-w-0">
-                                      <p className="font-bold text-xs text-brand-dark truncate">
-                                        {item.model || 'Sem modelo'} - {item.color || 'Sem cor'}
-                                      </p>
-                                      <p className="text-[10px] text-gray-500 font-medium">
-                                        {item.gender ? `Gênero: ${item.gender} | ` : ''}
-                                        {item.arrivalMonth}/{item.arrivalYear} - <strong className="text-brand-blue">{item.total} pares</strong>
-                                      </p>
-                                    </div>
-                                    <div className="flex gap-1.5 shrink-0">
-                                      <button
-                                        type="button"
-                                        onClick={() => setViewingPdfItem(item)}
-                                        className="p-1.5 bg-gray-100 hover:bg-brand-blue hover:text-white rounded-lg text-gray-600 transition-colors"
-                                        title="Comprovante"
-                                      >
-                                        <FileText size={14} />
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => handleEdit(item)}
-                                        className="p-1.5 bg-gray-100 hover:bg-amber-500 hover:text-white rounded-lg text-gray-600 transition-colors"
-                                        title="Editar"
-                                      >
-                                        <Edit2 size={14} />
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => handleDelete(item.id)}
-                                        className="p-1.5 bg-red-50 hover:bg-brand-red hover:text-white rounded-lg text-red-500 transition-colors"
-                                        title="Excluir lote"
-                                      >
-                                        <Trash2 size={14} />
-                                      </button>
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-
-                          {/* Footer with last launch date & Excluir Marca link */}
-                          <div className="flex items-center justify-between text-[11px] text-gray-400 font-bold pt-1 border-t border-gray-50">
-                            <span>{brand.lastDateStr ? `Último lançamento: ${brand.lastDateStr}` : 'Nenhum lançamento recente'}</span>
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteBrand(brand.name, brand.totalLots, brand.totalPieces)}
-                              className="text-rose-500 hover:text-rose-700 flex items-center gap-1 text-[10px] font-black uppercase tracking-wider hover:underline"
-                            >
-                              <Trash2 size={12} />
-                              EXCLUIR MARCA
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
+                    {filteredBrandStats.map(brand => (
+                      <BrandStatCard
+                        key={brand.name}
+                        brand={brand as BrandStat}
+                        isExpanded={expandedBrand === brand.name}
+                        isCompleted={!!completedBrands[brand.name]}
+                        onToggleExpand={handleToggleExpandBrand}
+                        onStartWithSameBrand={handleStartWithSameBrand}
+                        onToggleBrandCompletion={handleToggleBrandCompletion}
+                        onDeleteBrand={handleDeleteBrand}
+                        onViewBrandPreview={handleViewBrandPreview}
+                        onEditBrand={handleEditBrand}
+                        onGenerateBrandPdf={handleGenerateBrandPdf}
+                        onViewPdfItem={handleViewPdf}
+                        onEditItem={handleEdit}
+                        onDeleteItem={handleDelete}
+                      />
+                    ))}
                   </div>
                 )
               ) : (
@@ -2259,132 +2093,15 @@ const App: React.FC = () => {
                 ) : (
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
                     {filteredCounts.map((item, index) => (
-                      <motion.div 
-                        key={item.id} 
-                        layout
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ delay: index * 0.05 }}
-                        className="bg-white rounded-[2.5rem] shadow-modern-sm border border-gray-100 overflow-hidden group"
-                      >
-                        <div className="p-6 space-y-4">
-                          {/* Top row: Actions and Date */}
-                          <div className="flex justify-between items-center">
-                            <span className="text-gray-400 text-xs font-bold uppercase tracking-widest bg-brand-slate px-3 py-1 rounded-lg">
-                              {new Date(item.createdAt).toLocaleDateString('pt-BR')}
-                            </span>
-                            
-                            <div className="flex gap-2">
-                              <button 
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setViewingPdfItem(item);
-                                }}
-                                className="w-11 h-11 flex items-center justify-center bg-brand-slate text-brand-blue rounded-xl hover:bg-white hover:shadow-md transition-all active:scale-90"
-                                title="Visualizar Comprovante / PDF"
-                              >
-                                <FileText size={18} strokeWidth={2.5} />
-                              </button>
-                              <button 
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleEdit(item);
-                                }}
-                                className="w-11 h-11 flex items-center justify-center bg-brand-slate text-brand-blue rounded-xl hover:bg-brand-blue hover:text-white transition-all active:scale-90"
-                                title="Editar"
-                              >
-                                <Edit2 size={18} strokeWidth={2.5} />
-                              </button>
-                              <button 
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleDelete(item.id);
-                                }}
-                                className="w-11 h-11 flex items-center justify-center bg-red-50 text-red-500 rounded-xl hover:bg-brand-red hover:text-white transition-all active:scale-90"
-                                title="Excluir"
-                              >
-                                <Trash2 size={18} strokeWidth={2.5} />
-                              </button>
-                            </div>
-                          </div>
-
-                          {/* Middle row: Brand (Bold), Gender & Completion Status */}
-                          <div className="space-y-1">
-                            <h3 className="font-display font-black text-brand-dark text-2xl leading-tight tracking-tight uppercase flex flex-wrap items-center gap-2">
-                              <span>{item.brand || item.model || 'SEM MARCA'}</span>
-                              {item.gender && (
-                                <span className={`text-[10px] px-2.5 py-0.5 rounded-full font-black uppercase tracking-wider ${
-                                  item.gender === 'M' ? 'bg-blue-50 text-blue-600 border border-blue-100' :
-                                  item.gender === 'F' ? 'bg-pink-50 text-pink-600 border border-pink-100' :
-                                  item.gender === 'IM' ? 'bg-indigo-50 text-indigo-600 border border-indigo-100' :
-                                  'bg-purple-50 text-purple-600 border border-purple-100'
-                                }`}>
-                                  {item.gender === 'M' ? 'Masc' : item.gender === 'F' ? 'Fem' : item.gender === 'IM' ? 'Inf.M' : 'Inf.F'}
-                                </span>
-                              )}
-
-                              {(() => {
-                                const isCompleted = item.status === 'COMPLETED' || item.status === 'FINISHED' || !!completedBrands[item.brand || ''];
-                                return (
-                                  <span className={`text-[10px] px-2.5 py-0.5 rounded-full font-black uppercase tracking-wider flex items-center gap-1 ${
-                                    isCompleted 
-                                      ? 'bg-emerald-50 text-emerald-700 border border-emerald-200/80' 
-                                      : 'bg-amber-50 text-amber-700 border border-amber-200/80'
-                                  }`}>
-                                    {isCompleted ? (
-                                      <>
-                                        <CheckCircle2 size={11} className="text-emerald-600" />
-                                        Concluída
-                                      </>
-                                    ) : (
-                                      <>
-                                        <Clock size={11} className="text-amber-600" />
-                                        Em Andamento
-                                      </>
-                                    )}
-                                  </span>
-                                );
-                              })()}
-                            </h3>
-                            <div className="flex flex-wrap items-center gap-2 text-xs font-bold text-gray-400 uppercase tracking-wider">
-                              {item.model && <span>{item.model}</span>}
-                              {item.model && item.color && <span className="w-1 h-1 bg-gray-200 rounded-full"></span>}
-                              {item.color && <span>{item.color}</span>}
-                              {(item.arrivalMonth || item.arrivalYear) && (
-                                <>
-                                  <span className="w-1 h-1 bg-gray-200 rounded-full"></span>
-                                  <span className="text-brand-red flex items-center gap-1">
-                                    <TrendingUp size={10} />
-                                    {item.arrivalMonth}/{item.arrivalYear}
-                                  </span>
-                                </>
-                              )}
-                            </div>
-                          </div>
-
-                          {/* Bottom Row: Totals and Sizes */}
-                          <div className="pt-4 border-t border-gray-50 flex items-center gap-4">
-                            <div className="bg-brand-blue/10 px-4 py-3 rounded-2xl text-center min-w-[85px] border border-brand-blue/5">
-                              <p className="text-[9px] font-black text-brand-blue/40 uppercase tracking-widest mb-1 leading-none">Total</p>
-                              <p className="text-2xl font-display font-black text-brand-blue leading-none tracking-tighter">{item.total}</p>
-                            </div>
-                            
-                            <div className="flex-1 flex gap-2 overflow-x-auto pb-2 no-scrollbar scroll-smooth">
-                              {Object.entries(item.sizes)
-                                .filter(([_, qty]) => (qty as any) > 0)
-                                .map(([size, qty]) => (
-                                  <div 
-                                    key={size} 
-                                    className="bg-brand-slate px-3.5 py-2.5 rounded-xl text-center min-w-[55px] border border-white shadow-sm"
-                                  >
-                                    <p className="text-[9px] font-bold text-brand-accent uppercase leading-none mb-1.5">{size}</p>
-                                    <p className="text-sm font-black text-brand-dark leading-none">{qty}</p>
-                                  </div>
-                                ))}
-                            </div>
-                          </div>
-                        </div>
-                      </motion.div>
+                      <InventoryItemCard
+                        key={item.id}
+                        item={item}
+                        index={index}
+                        isCompleted={item.status === 'COMPLETED' || item.status === 'FINISHED' || !!completedBrands[item.brand || '']}
+                        onViewPdf={handleViewPdf}
+                        onEdit={handleEdit}
+                        onDelete={handleDelete}
+                      />
                     ))}
                   </div>
                 )
@@ -2762,45 +2479,13 @@ const App: React.FC = () => {
                     });
                     
                     return [...defaultSizes, ...sortedCustom].map(size => (
-                      <motion.div 
-                        layout
-                        key={size} 
-                        className="grid grid-cols-[80px_1fr] items-center p-3 rounded-2xl bg-brand-slate/40 border border-white focus-within:bg-white focus-within:shadow-lg transition-all"
-                      >
-                        <div className="text-center border-r border-gray-100 pr-2">
-                          <label className="text-[7px] font-black text-gray-400 uppercase tracking-widest block mb-0.5">Tamanho</label>
-                          <span className="text-xl font-display font-black text-brand-dark">{size}</span>
-                        </div>
-                        
-                        <div className="flex items-center gap-4 px-3">
-                          <motion.button 
-                            whileTap={{ scale: 0.9 }}
-                            onClick={() => adjustSizeCount(size, -1)}
-                            className="w-11 h-11 flex items-center justify-center bg-white rounded-xl shadow-sm text-red-500 border border-gray-100 active:bg-red-50"
-                          >
-                            <Minus size={18} strokeWidth={3} />
-                          </motion.button>
-                          
-                          <input 
-                            type="number"
-                            inputMode="numeric"
-                            min="0"
-                            className="flex-1 w-full bg-transparent border-none text-center text-3xl font-display font-black text-brand-blue focus:ring-0 focus:outline-none placeholder:text-gray-100"
-                            value={formData.sizes?.[size] || ''}
-                            onChange={(e) => updateSizeCount(size, e.target.value)}
-                            onFocus={(e) => e.target.select()}
-                            placeholder="0"
-                          />
-                          
-                          <motion.button 
-                            whileTap={{ scale: 0.9 }}
-                            onClick={() => adjustSizeCount(size, 1)}
-                            className="w-11 h-11 flex items-center justify-center bg-white rounded-xl shadow-sm text-brand-accent border border-gray-100 active:bg-blue-50"
-                          >
-                            <Plus size={18} strokeWidth={3} />
-                          </motion.button>
-                        </div>
-                      </motion.div>
+                      <SizeGridRow
+                        key={size}
+                        size={size}
+                        value={formData.sizes?.[size] || 0}
+                        onUpdate={updateSizeCount}
+                        onAdjust={adjustSizeCount}
+                      />
                     ));
                   })()}
                   
@@ -3831,14 +3516,6 @@ const App: React.FC = () => {
           >
             <BrainCircuit size={18} />
             <span className="text-[9px] sm:text-[10px] font-black uppercase tracking-wider leading-none">Análise</span>
-          </button>
-
-          <button 
-            onClick={() => setCurrentView(AppView.DASHBOARD)}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-3.5 sm:py-4 rounded-[1.8rem] transition-all duration-500 ${currentView === AppView.DASHBOARD ? 'bg-white text-brand-blue shadow-xl' : 'text-white/40 hover:text-white'}`}
-          >
-            <BarChart3 size={18} />
-            <span className="text-[9px] sm:text-[10px] font-black uppercase tracking-wider leading-none">Dashboard</span>
           </button>
 
           <button 
