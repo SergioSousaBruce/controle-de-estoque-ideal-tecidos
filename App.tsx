@@ -1841,7 +1841,8 @@ const App: React.FC = () => {
   return (
     <div className="min-h-screen flex flex-col max-w-lg sm:max-w-xl md:max-w-4xl lg:max-w-6xl xl:max-w-7xl mx-auto w-full bg-brand-slate dark:bg-slate-950 dark:text-slate-100 shadow-2xl relative overflow-x-clip font-sans transition-colors duration-200">
       {/* HEADER (No Print) */}
-      <header className="no-print bg-slate-950/95 backdrop-blur-md border-b border-slate-800 text-white py-2.5 sm:py-3 px-3.5 sm:px-6 sticky top-0 z-50 flex items-center justify-between gap-2 sm:gap-3 shadow-xl">
+      <header className="no-print bg-slate-950/95 backdrop-blur-md border-b border-slate-800 text-white py-2.5 sm:py-3 px-3.5 sm:px-6 sticky top-0 z-50 flex flex-col gap-2 shadow-xl">
+        <div className="flex items-center justify-between gap-2 sm:gap-3 w-full">
         <div 
           onClick={() => setCurrentView(AppView.HOME)}
           className="flex items-center gap-2.5 sm:gap-3 cursor-pointer group min-w-0"
@@ -1964,10 +1965,107 @@ const App: React.FC = () => {
           )}
           <OfflineSyncBadge userId={currentUserId} showToast={showToast} />
         </div>
+        </div>
+
+        {/* MOBILE TOP NAVIGATION BAR (All 6 options clear & never covered by bottom overlays) */}
+        <nav
+          aria-label="Navegação principal mobile"
+          className="md:hidden grid grid-cols-6 gap-1 pt-2 border-t border-slate-800/80 w-full"
+        >
+          <button
+            type="button"
+            onClick={() => setCurrentView(AppView.HOME)}
+            className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-xl transition-all cursor-pointer active:scale-95 ${
+              currentView === AppView.HOME
+                ? 'bg-white text-slate-950 shadow-sm'
+                : 'text-slate-300 hover:bg-slate-800/80'
+            }`}
+          >
+            <Home size={15} strokeWidth={2.4} />
+            <span className="text-[9.5px] leading-none font-bold tracking-tight whitespace-nowrap">
+              Início
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setCurrentView(AppView.INVENTORIES)}
+            className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-xl transition-all cursor-pointer active:scale-95 ${
+              currentView === AppView.INVENTORIES
+                ? 'bg-white text-slate-950 shadow-sm'
+                : 'text-slate-300 hover:bg-slate-800/80'
+            }`}
+          >
+            <ClipboardList size={15} strokeWidth={2.4} />
+            <span className="text-[9.5px] leading-none font-bold tracking-tight whitespace-nowrap">
+              Marcas
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setPurchasingInitialPriority('ALL');
+              setCurrentView(AppView.PURCHASING);
+            }}
+            className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-xl transition-all cursor-pointer active:scale-95 ${
+              currentView === AppView.PURCHASING
+                ? 'bg-amber-400 text-slate-950 shadow-sm'
+                : 'text-amber-300 hover:bg-amber-500/15'
+            }`}
+          >
+            <ShoppingCart size={15} strokeWidth={2.4} />
+            <span className="text-[9.5px] leading-none font-bold tracking-tight whitespace-nowrap">
+              Compras
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setCurrentView(AppView.ANALYTICS)}
+            className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-xl transition-all cursor-pointer active:scale-95 ${
+              currentView === AppView.ANALYTICS
+                ? 'bg-white text-slate-950 shadow-sm'
+                : 'text-slate-300 hover:bg-slate-800/80'
+            }`}
+          >
+            <BrainCircuit size={15} strokeWidth={2.4} />
+            <span className="text-[9.5px] leading-none font-bold tracking-tight whitespace-nowrap">
+              Análise
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setCurrentView(AppView.DASHBOARD)}
+            className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-xl transition-all cursor-pointer active:scale-95 ${
+              currentView === AppView.DASHBOARD
+                ? 'bg-emerald-400 text-slate-950 shadow-sm'
+                : 'text-emerald-300 hover:bg-emerald-500/15'
+            }`}
+          >
+            <BarChart3 size={15} strokeWidth={2.4} />
+            <span className="text-[9.5px] leading-none font-bold tracking-tight whitespace-nowrap">
+              Dashboard
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={generatePDF}
+            className="flex flex-col items-center justify-center gap-1 py-1.5 rounded-xl text-rose-300 hover:bg-rose-500/15 transition-all cursor-pointer active:scale-95"
+            title="Gerar PDF Geral do Estoque"
+          >
+            <Download size={15} strokeWidth={2.4} />
+            <span className="text-[9.5px] leading-none font-bold tracking-tight whitespace-nowrap">
+              PDF
+            </span>
+          </button>
+        </nav>
       </header>
 
       {/* VIEWS */}
-      <main className="flex-1 p-3.5 sm:p-5 md:p-6 pb-28 md:pb-12 no-print space-y-5 sm:space-y-8">
+      <main className="flex-1 p-3.5 sm:p-5 md:p-6 pb-16 md:pb-12 no-print space-y-5 sm:space-y-8">
         <PwaInstallBanner {...pwaInstall} />
         <AnimatePresence mode="wait">
           {currentView === AppView.HOME && (
@@ -2900,7 +2998,7 @@ const App: React.FC = () => {
               </div>
 
               {/* Sticky Bottom Quick Save Bar */}
-              <div className="sticky bottom-20 md:bottom-4 z-40 bg-slate-900/95 backdrop-blur-md text-white px-4 py-3 rounded-2xl shadow-2xl border border-slate-700/80 flex flex-wrap items-center justify-between gap-2.5">
+              <div className="sticky bottom-16 md:bottom-4 z-40 bg-slate-900/95 backdrop-blur-md text-white px-4 py-3 rounded-2xl shadow-2xl border border-slate-700/80 flex flex-wrap items-center justify-between gap-2.5">
                 <div className="flex items-center gap-2.5">
                   <div className="w-9 h-9 rounded-xl bg-brand-red/20 text-brand-red border border-brand-red/30 flex items-center justify-center shrink-0">
                     <Package size={18} />
@@ -3760,153 +3858,12 @@ const App: React.FC = () => {
         )}
       </main>
 
-      <footer className="no-print pb-32 md:pb-12 px-6 text-center">
+      <footer className="no-print pb-16 md:pb-12 px-6 text-center">
         <p className="text-[9px] font-black text-gray-400 dark:text-slate-500 uppercase tracking-[0.3em] leading-relaxed">
           Ideal Tecidos - Controle de Estoque<br/>
           <span className="text-brand-blue/40 dark:text-blue-400/50">Desenvolvido pelo Engenheiro de Software Sergio Bruce</span>
         </p>
       </footer>
-
-      {/* FIXED FOOTER NAVIGATION (Mobile Only - Desktop uses Top Header Nav) */}
-      <nav
-        aria-label="Navegação principal mobile"
-        className="no-print md:hidden fixed bottom-0 left-0 right-0 z-50 bg-slate-950/95 backdrop-blur-xl border-t border-slate-800/90 shadow-[0_-8px_28px_rgba(2,6,23,0.4)]"
-        style={{ paddingBottom: 'max(0.35rem, env(safe-area-inset-bottom, 0px))' }}
-      >
-        <div className="max-w-lg mx-auto grid grid-cols-6 gap-0.5 px-1.5 pt-1.5">
-          <button
-            type="button"
-            onClick={() => setCurrentView(AppView.HOME)}
-            className="flex flex-col items-center justify-center gap-1 py-1 min-h-[48px] rounded-xl transition-colors cursor-pointer active:scale-95"
-          >
-            <span
-              className={`w-10 h-7 rounded-full flex items-center justify-center transition-all ${
-                currentView === AppView.HOME
-                  ? 'bg-white text-slate-950 shadow-sm'
-                  : 'text-slate-300 hover:bg-white/10'
-              }`}
-            >
-              <Home size={16} strokeWidth={2.4} />
-            </span>
-            <span
-              className={`text-[9.5px] leading-none font-bold tracking-tight whitespace-nowrap ${
-                currentView === AppView.HOME ? 'text-white' : 'text-slate-400'
-              }`}
-            >
-              Início
-            </span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setCurrentView(AppView.INVENTORIES)}
-            className="flex flex-col items-center justify-center gap-1 py-1 min-h-[48px] rounded-xl transition-colors cursor-pointer active:scale-95"
-          >
-            <span
-              className={`w-10 h-7 rounded-full flex items-center justify-center transition-all ${
-                currentView === AppView.INVENTORIES
-                  ? 'bg-white text-slate-950 shadow-sm'
-                  : 'text-slate-300 hover:bg-white/10'
-              }`}
-            >
-              <ClipboardList size={16} strokeWidth={2.4} />
-            </span>
-            <span
-              className={`text-[9.5px] leading-none font-bold tracking-tight whitespace-nowrap ${
-                currentView === AppView.INVENTORIES ? 'text-white' : 'text-slate-400'
-              }`}
-            >
-              Marcas
-            </span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              setPurchasingInitialPriority('ALL');
-              setCurrentView(AppView.PURCHASING);
-            }}
-            className="flex flex-col items-center justify-center gap-1 py-1 min-h-[48px] rounded-xl transition-colors cursor-pointer active:scale-95"
-          >
-            <span
-              className={`w-10 h-7 rounded-full flex items-center justify-center transition-all ${
-                currentView === AppView.PURCHASING
-                  ? 'bg-amber-400 text-slate-950 shadow-sm'
-                  : 'text-amber-300 hover:bg-amber-500/15'
-              }`}
-            >
-              <ShoppingCart size={16} strokeWidth={2.4} />
-            </span>
-            <span
-              className={`text-[9.5px] leading-none font-bold tracking-tight whitespace-nowrap ${
-                currentView === AppView.PURCHASING ? 'text-amber-300' : 'text-amber-200/80'
-              }`}
-            >
-              Compras
-            </span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setCurrentView(AppView.ANALYTICS)}
-            className="flex flex-col items-center justify-center gap-1 py-1 min-h-[48px] rounded-xl transition-colors cursor-pointer active:scale-95"
-          >
-            <span
-              className={`w-10 h-7 rounded-full flex items-center justify-center transition-all ${
-                currentView === AppView.ANALYTICS
-                  ? 'bg-white text-slate-950 shadow-sm'
-                  : 'text-slate-300 hover:bg-white/10'
-              }`}
-            >
-              <BrainCircuit size={16} strokeWidth={2.4} />
-            </span>
-            <span
-              className={`text-[9.5px] leading-none font-bold tracking-tight whitespace-nowrap ${
-                currentView === AppView.ANALYTICS ? 'text-white' : 'text-slate-400'
-              }`}
-            >
-              Análise
-            </span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setCurrentView(AppView.DASHBOARD)}
-            className="flex flex-col items-center justify-center gap-1 py-1 min-h-[48px] rounded-xl transition-colors cursor-pointer active:scale-95"
-          >
-            <span
-              className={`w-10 h-7 rounded-full flex items-center justify-center transition-all ${
-                currentView === AppView.DASHBOARD
-                  ? 'bg-emerald-400 text-slate-950 shadow-sm'
-                  : 'text-emerald-300 hover:bg-emerald-500/15'
-              }`}
-            >
-              <BarChart3 size={16} strokeWidth={2.4} />
-            </span>
-            <span
-              className={`text-[9.5px] leading-none font-bold tracking-tight whitespace-nowrap ${
-                currentView === AppView.DASHBOARD ? 'text-emerald-300' : 'text-emerald-200/80'
-              }`}
-            >
-              Dashboard
-            </span>
-          </button>
-
-          <button
-            type="button"
-            onClick={generatePDF}
-            className="flex flex-col items-center justify-center gap-1 py-1 min-h-[48px] rounded-xl transition-colors cursor-pointer active:scale-95"
-            title="Gerar PDF Geral do Estoque"
-          >
-            <span className="w-10 h-7 rounded-full flex items-center justify-center text-rose-300 hover:bg-rose-500/15 transition-all">
-              <Download size={16} strokeWidth={2.4} />
-            </span>
-            <span className="text-[9.5px] leading-none font-bold tracking-tight whitespace-nowrap text-rose-200/85">
-              PDF
-            </span>
-          </button>
-        </div>
-      </nav>
 
       {/* PRINT REPORT (Hidden on screen, visible on print) */}
       <div className="print-only">
@@ -4087,7 +4044,7 @@ const App: React.FC = () => {
             initial={{ opacity: 0, y: 50 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 20 }}
-            className="fixed bottom-28 left-1/2 -translate-x-1/2 z-[110] w-[90%] max-w-xs"
+            className="fixed bottom-16 sm:bottom-8 left-1/2 -translate-x-1/2 z-[110] w-[90%] max-w-xs"
           >
             <div className={`flex items-center gap-3 p-4 rounded-2xl shadow-2xl backdrop-blur-md border ${
               toast.type === 'success' ? 'bg-green-500/90 border-green-400 text-white' : 'bg-red-500/90 border-red-400 text-white'
