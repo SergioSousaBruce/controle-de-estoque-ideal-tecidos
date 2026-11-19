@@ -1839,15 +1839,15 @@ const App: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen flex flex-col max-w-lg sm:max-w-xl md:max-w-4xl lg:max-w-6xl xl:max-w-7xl mx-auto w-full bg-brand-slate dark:bg-slate-950 dark:text-slate-100 shadow-2xl relative overflow-x-hidden font-sans transition-colors duration-200">
+    <div className="min-h-screen flex flex-col max-w-lg sm:max-w-xl md:max-w-4xl lg:max-w-6xl xl:max-w-7xl mx-auto w-full bg-brand-slate dark:bg-slate-950 dark:text-slate-100 shadow-2xl relative overflow-x-clip font-sans transition-colors duration-200">
       {/* HEADER (No Print) */}
-      <header className="no-print bg-slate-950/95 backdrop-blur-md border-b border-slate-800 text-white py-2.5 sm:py-3 px-4 sm:px-6 sticky top-0 z-50 flex items-center justify-between gap-3 shadow-xl">
+      <header className="no-print bg-slate-950/95 backdrop-blur-md border-b border-slate-800 text-white py-2.5 sm:py-3 px-3.5 sm:px-6 sticky top-0 z-50 flex items-center justify-between gap-2 sm:gap-3 shadow-xl">
         <div 
           onClick={() => setCurrentView(AppView.HOME)}
-          className="flex items-center gap-2.5 sm:gap-3 cursor-pointer group shrink-0"
+          className="flex items-center gap-2.5 sm:gap-3 cursor-pointer group min-w-0"
           title="Ir para a Página Inicial"
         >
-          <div className="w-11 h-11 sm:w-13 sm:h-13 bg-white rounded-full flex items-center justify-center shadow-lg border-2 border-white/20 overflow-hidden shrink-0 group-hover:scale-105 transition-transform p-0.5">
+          <div className="w-10 h-10 sm:w-12 sm:h-12 bg-white rounded-full flex items-center justify-center shadow-lg border-2 border-white/20 overflow-hidden shrink-0 group-hover:scale-105 transition-transform p-0.5">
             <svg viewBox="0 0 100 100" className="w-full h-full">
               <circle cx="50" cy="50" r="50" fill="#ffffff" />
               <path d="M -10 66 Q 50 54 110 66 L 110 110 L -10 110 Z" fill="#1D2B5B" />
@@ -1857,16 +1857,16 @@ const App: React.FC = () => {
               <text x="50" y="57" textAnchor="middle" fill="#1D2B5B" fontFamily="Arial, Helvetica, sans-serif" fontWeight="900" fontSize="6.2" letterSpacing="0.2">CALÇADOS E CONFECÇÕES</text>
             </svg>
           </div>
-          <div className="flex flex-col justify-center">
-            <div className="flex items-center gap-2">
-              <h1 className="font-display font-black text-base sm:text-lg uppercase tracking-tight leading-none text-white group-hover:text-emerald-400 transition-colors">
+          <div className="flex flex-col justify-center min-w-0">
+            <div className="flex items-center gap-2 min-w-0">
+              <h1 className="font-display font-black text-sm sm:text-lg uppercase tracking-tight leading-none text-white group-hover:text-emerald-400 transition-colors truncate">
                 A Ideal Tecidos
               </h1>
-              <span className="hidden sm:inline-block px-2 py-0.5 rounded-full bg-brand-red/20 text-red-400 border border-brand-red/30 text-[9px] font-black uppercase tracking-wider">
+              <span className="hidden sm:inline-block px-2 py-0.5 rounded-full bg-brand-red/20 text-red-400 border border-brand-red/30 text-[9px] font-black uppercase tracking-wider shrink-0">
                 Estoque
               </span>
             </div>
-            <p className="text-[10px] font-black uppercase tracking-wider text-blue-300 mt-0.5 leading-none">
+            <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-wider text-blue-300 mt-0.5 leading-none truncate">
               Calçados e Confecções
             </p>
             <p className="hidden sm:block text-[10px] font-bold text-amber-300 italic mt-0.5 leading-none">
@@ -1962,44 +1962,7 @@ const App: React.FC = () => {
               <span className="hidden sm:inline">Instalar</span>
             </button>
           )}
-          <button 
-            type="button"
-            onClick={() => {
-              setPurchasingInitialPriority('ALL');
-              setCurrentView(AppView.PURCHASING);
-            }}
-            className={`md:hidden flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all active:scale-95 border ${
-              currentView === AppView.PURCHASING
-                ? 'bg-amber-500 text-slate-950 border-amber-300 shadow-md'
-                : 'bg-amber-950/60 hover:bg-amber-900/60 text-amber-300 border-amber-500/30'
-            }`}
-            title="Central de Compras e Grade Furada"
-          >
-            <ShoppingCart size={15} />
-          </button>
-          <button 
-            type="button"
-            onClick={() => setCurrentView(AppView.DASHBOARD)}
-            className={`md:hidden flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all active:scale-95 border ${
-              currentView === AppView.DASHBOARD
-                ? 'bg-emerald-600 text-white border-emerald-400 shadow-md shadow-emerald-950/50'
-                : 'bg-emerald-950/60 hover:bg-emerald-900/60 text-emerald-300 border-emerald-500/30'
-            }`}
-            title="Abrir Dashboard"
-          >
-            <BarChart3 size={15} />
-          </button>
           <OfflineSyncBadge userId={currentUserId} showToast={showToast} />
-          {currentView !== AppView.HOME && (
-            <button 
-              type="button"
-              onClick={() => setCurrentView(AppView.HOME)}
-              className="md:hidden flex items-center gap-1 px-2.5 py-1.5 bg-slate-800/80 hover:bg-slate-700 text-slate-200 border border-slate-700/80 rounded-xl text-xs font-black uppercase tracking-wider transition-all active:scale-95"
-              title="Voltar ao Início"
-            >
-              <Home size={15} />
-            </button>
-          )}
         </div>
       </header>
 
@@ -2937,7 +2900,7 @@ const App: React.FC = () => {
               </div>
 
               {/* Sticky Bottom Quick Save Bar */}
-              <div className="sticky bottom-24 md:bottom-4 z-40 bg-slate-900/95 backdrop-blur-md text-white px-4 py-3 rounded-2xl shadow-2xl border border-slate-700/80 flex flex-wrap items-center justify-between gap-2.5">
+              <div className="sticky bottom-20 md:bottom-4 z-40 bg-slate-900/95 backdrop-blur-md text-white px-4 py-3 rounded-2xl shadow-2xl border border-slate-700/80 flex flex-wrap items-center justify-between gap-2.5">
                 <div className="flex items-center gap-2.5">
                   <div className="w-9 h-9 rounded-xl bg-brand-red/20 text-brand-red border border-brand-red/30 flex items-center justify-center shrink-0">
                     <Package size={18} />
@@ -3804,55 +3767,143 @@ const App: React.FC = () => {
         </p>
       </footer>
 
-       {/* FIXED FOOTER NAVIGATION (Mobile Only - Desktop uses Top Header Nav) */}
-      <nav className="no-print md:hidden fixed bottom-0 left-0 right-0 max-w-lg mx-auto p-2.5 z-50" style={{ paddingBottom: 'calc(0.65rem + env(safe-area-inset-bottom, 0px))' }}>
-        <div className="bg-brand-blue/95 dark:bg-slate-900/95 backdrop-blur-xl rounded-[2.5rem] p-1.5 flex gap-1 shadow-2xl shadow-brand-blue/40 border border-white/10">
-          <button 
+      {/* FIXED FOOTER NAVIGATION (Mobile Only - Desktop uses Top Header Nav) */}
+      <nav
+        aria-label="Navegação principal mobile"
+        className="no-print md:hidden fixed bottom-0 left-0 right-0 z-50 bg-slate-950/95 backdrop-blur-xl border-t border-slate-800/90 shadow-[0_-8px_28px_rgba(2,6,23,0.4)]"
+        style={{ paddingBottom: 'max(0.35rem, env(safe-area-inset-bottom, 0px))' }}
+      >
+        <div className="max-w-lg mx-auto grid grid-cols-6 gap-0.5 px-1.5 pt-1.5">
+          <button
             type="button"
             onClick={() => setCurrentView(AppView.HOME)}
-            className={`flex-1 flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-1 py-2.5 sm:py-3.5 rounded-[1.8rem] transition-all duration-300 cursor-pointer ${currentView === AppView.HOME ? 'bg-white text-brand-blue shadow-xl' : 'text-white/60 hover:text-white'}`}
+            className="flex flex-col items-center justify-center gap-1 py-1 min-h-[48px] rounded-xl transition-colors cursor-pointer active:scale-95"
           >
-            <Home size={16} fill={currentView === AppView.HOME ? "currentColor" : "none"} />
-            <span className="text-[8.5px] sm:text-[10px] font-black uppercase tracking-wider leading-none">Início</span>
+            <span
+              className={`w-10 h-7 rounded-full flex items-center justify-center transition-all ${
+                currentView === AppView.HOME
+                  ? 'bg-white text-slate-950 shadow-sm'
+                  : 'text-slate-300 hover:bg-white/10'
+              }`}
+            >
+              <Home size={16} strokeWidth={2.4} />
+            </span>
+            <span
+              className={`text-[9.5px] leading-none font-bold tracking-tight whitespace-nowrap ${
+                currentView === AppView.HOME ? 'text-white' : 'text-slate-400'
+              }`}
+            >
+              Início
+            </span>
           </button>
 
-          <button 
+          <button
             type="button"
             onClick={() => setCurrentView(AppView.INVENTORIES)}
-            className={`flex-1 flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-1 py-2.5 sm:py-3.5 rounded-[1.8rem] transition-all duration-300 cursor-pointer ${currentView === AppView.INVENTORIES ? 'bg-white text-brand-blue shadow-xl' : 'text-white/60 hover:text-white'}`}
+            className="flex flex-col items-center justify-center gap-1 py-1 min-h-[48px] rounded-xl transition-colors cursor-pointer active:scale-95"
           >
-            <ClipboardList size={16} />
-            <span className="text-[8.5px] sm:text-[10px] font-black uppercase tracking-wider leading-none">Marcas</span>
+            <span
+              className={`w-10 h-7 rounded-full flex items-center justify-center transition-all ${
+                currentView === AppView.INVENTORIES
+                  ? 'bg-white text-slate-950 shadow-sm'
+                  : 'text-slate-300 hover:bg-white/10'
+              }`}
+            >
+              <ClipboardList size={16} strokeWidth={2.4} />
+            </span>
+            <span
+              className={`text-[9.5px] leading-none font-bold tracking-tight whitespace-nowrap ${
+                currentView === AppView.INVENTORIES ? 'text-white' : 'text-slate-400'
+              }`}
+            >
+              Marcas
+            </span>
           </button>
 
-          <button 
+          <button
             type="button"
             onClick={() => {
               setPurchasingInitialPriority('ALL');
               setCurrentView(AppView.PURCHASING);
             }}
-            className={`flex-1 flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-1 py-2.5 sm:py-3.5 rounded-[1.8rem] transition-all duration-300 cursor-pointer ${currentView === AppView.PURCHASING ? 'bg-amber-400 text-slate-950 shadow-xl' : 'text-amber-300/80 hover:text-amber-200'}`}
+            className="flex flex-col items-center justify-center gap-1 py-1 min-h-[48px] rounded-xl transition-colors cursor-pointer active:scale-95"
           >
-            <ShoppingCart size={16} />
-            <span className="text-[8.5px] sm:text-[10px] font-black uppercase tracking-wider leading-none">Compras</span>
-          </button>
-          
-          <button 
-            type="button"
-            onClick={() => setCurrentView(AppView.ANALYTICS)}
-            className={`flex-1 flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-1 py-2.5 sm:py-3.5 rounded-[1.8rem] transition-all duration-300 cursor-pointer ${currentView === AppView.ANALYTICS ? 'bg-white text-brand-blue shadow-xl' : 'text-white/60 hover:text-white'}`}
-          >
-            <BrainCircuit size={16} />
-            <span className="text-[8.5px] sm:text-[10px] font-black uppercase tracking-wider leading-none">Análise</span>
+            <span
+              className={`w-10 h-7 rounded-full flex items-center justify-center transition-all ${
+                currentView === AppView.PURCHASING
+                  ? 'bg-amber-400 text-slate-950 shadow-sm'
+                  : 'text-amber-300 hover:bg-amber-500/15'
+              }`}
+            >
+              <ShoppingCart size={16} strokeWidth={2.4} />
+            </span>
+            <span
+              className={`text-[9.5px] leading-none font-bold tracking-tight whitespace-nowrap ${
+                currentView === AppView.PURCHASING ? 'text-amber-300' : 'text-amber-200/80'
+              }`}
+            >
+              Compras
+            </span>
           </button>
 
-          <button 
+          <button
+            type="button"
+            onClick={() => setCurrentView(AppView.ANALYTICS)}
+            className="flex flex-col items-center justify-center gap-1 py-1 min-h-[48px] rounded-xl transition-colors cursor-pointer active:scale-95"
+          >
+            <span
+              className={`w-10 h-7 rounded-full flex items-center justify-center transition-all ${
+                currentView === AppView.ANALYTICS
+                  ? 'bg-white text-slate-950 shadow-sm'
+                  : 'text-slate-300 hover:bg-white/10'
+              }`}
+            >
+              <BrainCircuit size={16} strokeWidth={2.4} />
+            </span>
+            <span
+              className={`text-[9.5px] leading-none font-bold tracking-tight whitespace-nowrap ${
+                currentView === AppView.ANALYTICS ? 'text-white' : 'text-slate-400'
+              }`}
+            >
+              Análise
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setCurrentView(AppView.DASHBOARD)}
+            className="flex flex-col items-center justify-center gap-1 py-1 min-h-[48px] rounded-xl transition-colors cursor-pointer active:scale-95"
+          >
+            <span
+              className={`w-10 h-7 rounded-full flex items-center justify-center transition-all ${
+                currentView === AppView.DASHBOARD
+                  ? 'bg-emerald-400 text-slate-950 shadow-sm'
+                  : 'text-emerald-300 hover:bg-emerald-500/15'
+              }`}
+            >
+              <BarChart3 size={16} strokeWidth={2.4} />
+            </span>
+            <span
+              className={`text-[9.5px] leading-none font-bold tracking-tight whitespace-nowrap ${
+                currentView === AppView.DASHBOARD ? 'text-emerald-300' : 'text-emerald-200/80'
+              }`}
+            >
+              Dashboard
+            </span>
+          </button>
+
+          <button
             type="button"
             onClick={generatePDF}
-            className="flex-1 flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-1 py-2.5 sm:py-3.5 rounded-[1.8rem] text-white/60 hover:text-white hover:bg-white/5 transition-all duration-300 cursor-pointer"
+            className="flex flex-col items-center justify-center gap-1 py-1 min-h-[48px] rounded-xl transition-colors cursor-pointer active:scale-95"
+            title="Gerar PDF Geral do Estoque"
           >
-            <Download size={16} />
-            <span className="text-[8.5px] sm:text-[10px] font-black uppercase tracking-wider leading-none">PDF</span>
+            <span className="w-10 h-7 rounded-full flex items-center justify-center text-rose-300 hover:bg-rose-500/15 transition-all">
+              <Download size={16} strokeWidth={2.4} />
+            </span>
+            <span className="text-[9.5px] leading-none font-bold tracking-tight whitespace-nowrap text-rose-200/85">
+              PDF
+            </span>
           </button>
         </div>
       </nav>

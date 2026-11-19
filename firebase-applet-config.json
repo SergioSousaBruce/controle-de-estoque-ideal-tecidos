@@ -6,5 +6,7 @@
   "firestoreDatabaseId": "ai-studio-8399d91c-8567-428d-af3c-13250eca6386",
   "storageBucket": "divine-tiger-807pf.firebasestorage.app",
   "messagingSenderId": "66837618002",
-  "measurementId": ""
+  "measurementId": "",
+  "oAuthClientId": "66837618002-p3r4dp5obv0p459dnd74ac504qlk4uh1.apps.googleusercontent.com",
+  "recaptchaSiteKey": ""
 }
