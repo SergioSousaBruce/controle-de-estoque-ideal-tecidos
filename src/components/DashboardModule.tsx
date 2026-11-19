@@ -14,12 +14,20 @@ import { subscribeStockMovements } from '../services/stockMovementService';
 interface DashboardModuleProps {
   counts: InventoryCount[];
   onBackToHome?: () => void;
+  onOpenBrands?: () => void;
+  onOpenPurchasing?: (priority: 'ALL' | 'CRITICO' | 'ZERADOS' | 'BAIXO') => void;
+  onOpenSizeFilter?: (sizeKey: string) => void;
+  onSelectBrand?: (brandName: string) => void;
   showToast?: (message: string, type?: 'success' | 'error') => void;
 }
 
 export const DashboardModule: React.FC<DashboardModuleProps> = ({
   counts,
   onBackToHome,
+  onOpenBrands,
+  onOpenPurchasing,
+  onOpenSizeFilter,
+  onSelectBrand,
   showToast
 }) => {
   const [movements, setMovements] = useState<StockMovement[]>([]);
@@ -265,14 +273,18 @@ export const DashboardModule: React.FC<DashboardModuleProps> = ({
           <p className="text-[10px] font-bold text-slate-500">Unidades físicas estocadas</p>
         </div>
 
-        {/* Card 3: Qtd de Marcas */}
-        <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 space-y-2 shadow-lg hover:border-slate-700 transition-all">
+        {/* Card 3: Qtd de Marcas (Clicável) */}
+        <div
+          onClick={() => onOpenBrands?.()}
+          className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 space-y-2 shadow-lg hover:border-blue-500/60 transition-all cursor-pointer group"
+          title="Abrir lista de marcas"
+        >
           <div className="flex items-center justify-between text-slate-400">
             <span className="text-[10px] font-black uppercase tracking-wider">Marcas</span>
             <Tag size={18} className="text-blue-400" />
           </div>
           <p className="text-2xl font-black text-white">{totalBrandsCount}</p>
-          <p className="text-[10px] font-bold text-slate-500">Fornecedores cadastrados</p>
+          <p className="text-[10px] font-bold text-blue-400/90 group-hover:text-blue-300">Ver todas as marcas →</p>
         </div>
 
         {/* Card 4: Qtd de Modelos */}
@@ -285,14 +297,18 @@ export const DashboardModule: React.FC<DashboardModuleProps> = ({
           <p className="text-[10px] font-bold text-slate-500">Desenhos distintos</p>
         </div>
 
-        {/* Card 5: Numeração com Maior Qtd */}
-        <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 space-y-2 shadow-lg hover:border-slate-700 transition-all">
+        {/* Card 5: Numeração com Maior Qtd (Clicável) */}
+        <div
+          onClick={() => topSize.sizeKey && topSize.sizeKey !== 'N/A' && onOpenSizeFilter?.(topSize.sizeKey)}
+          className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 space-y-2 shadow-lg hover:border-amber-500/60 transition-all cursor-pointer group"
+          title="Filtrar itens com esta numeração"
+        >
           <div className="flex items-center justify-between text-slate-400">
             <span className="text-[10px] font-black uppercase tracking-wider">Top Numeração</span>
             <Award size={18} className="text-amber-400" />
           </div>
           <p className="text-2xl font-black text-amber-400">{topSize.sizeKey || '-'}</p>
-          <p className="text-[10px] font-bold text-slate-500">{topSize.quantity} pares em estoque</p>
+          <p className="text-[10px] font-bold text-slate-500 group-hover:text-amber-300">{topSize.quantity} pares • Filtrar →</p>
         </div>
 
         {/* Card 6: Estoque Normal */}
@@ -305,24 +321,32 @@ export const DashboardModule: React.FC<DashboardModuleProps> = ({
           <p className="text-[10px] font-bold text-slate-500">Produtos &gt; 3 pares</p>
         </div>
 
-        {/* Card 7: Estoque Baixo */}
-        <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 space-y-2 shadow-lg hover:border-slate-700 transition-all">
+        {/* Card 7: Estoque Baixo (Clicável -> Central de Compras) */}
+        <div
+          onClick={() => onOpenPurchasing?.('BAIXO')}
+          className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 space-y-2 shadow-lg hover:border-amber-500/70 transition-all cursor-pointer group"
+          title="Abrir Central de Compras (Estoque Baixo)"
+        >
           <div className="flex items-center justify-between text-slate-400">
             <span className="text-[10px] font-black uppercase tracking-wider">Estoque Baixo</span>
             <AlertTriangle size={18} className="text-amber-400" />
           </div>
           <p className="text-2xl font-black text-amber-400">{lowStockCount}</p>
-          <p className="text-[10px] font-bold text-slate-500">Apenas 1 a 3 pares</p>
+          <p className="text-[10px] font-bold text-amber-400/90 group-hover:text-amber-300">Abrir reposição →</p>
         </div>
 
-        {/* Card 8: Sem Estoque */}
-        <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 space-y-2 shadow-lg hover:border-slate-700 transition-all">
+        {/* Card 8: Sem Estoque (Clicável -> Central de Compras) */}
+        <div
+          onClick={() => onOpenPurchasing?.('ZERADOS')}
+          className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 space-y-2 shadow-lg hover:border-rose-500/70 transition-all cursor-pointer group"
+          title="Abrir Central de Compras (Zerados / Grade Furada)"
+        >
           <div className="flex items-center justify-between text-slate-400">
             <span className="text-[10px] font-black uppercase tracking-wider">Sem Estoque</span>
             <span className="w-2.5 h-2.5 rounded-full bg-rose-500"></span>
           </div>
           <p className="text-2xl font-black text-rose-400">{zeroStockCount}</p>
-          <p className="text-[10px] font-bold text-slate-500">Zerar o estoque (0 pares)</p>
+          <p className="text-[10px] font-bold text-rose-400/90 group-hover:text-rose-300">Ver faltas e compras →</p>
         </div>
       </div>
 
@@ -375,16 +399,22 @@ export const DashboardModule: React.FC<DashboardModuleProps> = ({
                 </ResponsiveContainer>
               </div>
 
-              {/* Legenda Detalhada das Marcas */}
+              {/* Legenda Detalhada das Marcas (Clicável para abrir grade da marca) */}
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-2 border-t border-slate-800/80">
                 {topBrandsData.map((item, idx) => (
-                  <div key={idx} className="flex items-center justify-between p-2.5 px-3 bg-slate-950/70 rounded-xl border border-slate-800/80">
+                  <button
+                    type="button"
+                    key={idx}
+                    onClick={() => onSelectBrand?.(item.name)}
+                    className="flex items-center justify-between p-2.5 px-3 bg-slate-950/70 hover:bg-slate-800/80 rounded-xl border border-slate-800/80 hover:border-emerald-500/50 transition-all cursor-pointer text-left"
+                    title={`Abrir grade consolidada de ${item.name}`}
+                  >
                     <div className="flex items-center gap-2 min-w-0">
                       <span className="w-3 h-3 rounded-md shrink-0 shadow-xs" style={{ backgroundColor: BRAND_BAR_COLORS[idx % BRAND_BAR_COLORS.length] }}></span>
                       <span className="text-xs font-bold text-slate-200 truncate uppercase" title={item.name}>{item.name}</span>
                     </div>
                     <span className="text-xs font-black text-emerald-400 font-mono shrink-0 ml-1.5">{item.total} <span className="text-[9px] text-slate-500 font-bold">prs</span></span>
-                  </div>
+                  </button>
                 ))}
               </div>
             </div>

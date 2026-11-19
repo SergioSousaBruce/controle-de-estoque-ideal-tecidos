@@ -26,9 +26,14 @@ h1, h2, h3, h4, h5, h6, p, span, button, th, td, label {
   word-break: break-word;
 }
 
-/* Touch targets for mobile */
-button, input, select, textarea {
+/* Touch targets for form inputs and coarse touch screens */
+input:not([type="checkbox"]):not([type="radio"]), select, textarea {
   min-height: 42px;
+}
+@media (pointer: coarse) {
+  button {
+    min-height: 36px;
+  }
 }
 
 /* Ensure SVGs and icons remain centered and constrained */

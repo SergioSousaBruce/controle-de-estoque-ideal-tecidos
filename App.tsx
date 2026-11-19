@@ -36,7 +36,13 @@ import {
   Lock,
   Unlock,
   RotateCcw,
-  ArrowUpDown
+  ArrowUpDown,
+  Copy,
+  Check,
+  ShoppingCart,
+  Sun,
+  Moon,
+  Filter
 } from 'lucide-react';
 import { OfflineSyncBadge } from './src/components/OfflineSyncBadge';
 import { queueOfflineCount } from './src/services/offlineSyncService';
@@ -46,6 +52,7 @@ import { recordStockMovement } from './src/services/stockMovementService';
 // Lazy loading heavy modals for optimal initial boot performance
 const ReportsModule = React.lazy(() => import('./src/components/ReportsModule').then(m => ({ default: m.ReportsModule })));
 const DashboardModule = React.lazy(() => import('./src/components/DashboardModule').then(m => ({ default: m.DashboardModule })));
+const PurchaseCenterModule = React.lazy(() => import('./src/components/PurchaseCenterModule').then(m => ({ default: m.PurchaseCenterModule })));
 const InventoryModeModule = React.lazy(() => import('./src/components/InventoryModeModule').then(m => ({ default: m.InventoryModeModule })));
 const StockMovementHistoryModule = React.lazy(() => import('./src/components/StockMovementHistoryModule').then(m => ({ default: m.StockMovementHistoryModule })));
 const ContinuousScannerModal = React.lazy(() => import('./src/components/ContinuousScannerModal').then(m => ({ default: m.ContinuousScannerModal })));
@@ -96,9 +103,12 @@ import { AppView, InventoryCount, SizeGridType, ShoeProduct, ShoeInventory } fro
 import { PRODUCT_TYPES, LETTER_SIZES, NUMERIC_SIZES, MONTHS, YEARS, getGenderFromProductType, getDefaultProductTypeFromGender, syncProductTypeWithGender, getDefaultSizesArray } from './constants';
 import { DEFAULT_BRANDS_LIST } from './src/services/inventoryDb';
 import { computeBrandSizeAnalysis } from './src/utils/brandAnalysis';
+import { exportBrandToExcel, exportAllInventoryToExcel } from './src/utils/excelExport';
 import { SizeGridRow } from './src/components/SizeGridRow';
 import { InventoryItemCard } from './src/components/InventoryItemCard';
 import { BrandStatCard, BrandStat } from './src/components/BrandStatCard';
+import { PwaInstallBanner, usePwaInstall } from './src/components/PwaInstallBanner';
+import { Smartphone } from 'lucide-react';
 
 const App: React.FC = () => {
   // Auth state
@@ -127,14 +137,41 @@ const App: React.FC = () => {
   const [isSyncing, setIsSyncing] = useState(false);
 
   // UI state
+  const [darkMode, setDarkMode] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('ideal_theme_mode') === 'dark';
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', darkMode);
+    try {
+      localStorage.setItem('ideal_theme_mode', darkMode ? 'dark' : 'light');
+    } catch {
+      // ignore
+    }
+  }, [darkMode]);
+
   const [currentView, setCurrentView] = useState<AppView>(AppView.HOME);
   const [viewingPdfItem, setViewingPdfItem] = useState<InventoryCount | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [historySort, setHistorySort] = useState<'AZ' | 'DATE'>('AZ');
   const [historyStatusFilter, setHistoryStatusFilter] = useState<'ALL' | 'COMPLETED' | 'IN_PROGRESS'>('ALL');
+  const [historyGenderFilter, setHistoryGenderFilter] = useState<'ALL' | 'M' | 'F' | 'IM' | 'IF'>('ALL');
+  const [historySizeFilter, setHistorySizeFilter] = useState('');
+  const [historySizeMode, setHistorySizeMode] = useState<'AVAILABLE' | 'MISSING'>('AVAILABLE');
   const [historyViewType, setHistoryViewType] = useState<'BRANDS' | 'ITEMS'>('BRANDS');
+  const [historyVisibleLimit, setHistoryVisibleLimit] = useState(20);
+  const [copiedBrandSummary, setCopiedBrandSummary] = useState(false);
+  const [purchasingInitialPriority, setPurchasingInitialPriority] = useState<'ALL' | 'CRITICO' | 'ZERADOS' | 'BAIXO'>('ALL');
+  const colorInputRef = React.useRef<HTMLInputElement>(null);
 
   const deferredSearchTerm = useDeferredValue(searchTerm);
+
+  useEffect(() => {
+    setHistoryVisibleLimit(20);
+  }, [deferredSearchTerm, historyStatusFilter, historyGenderFilter, historySizeFilter, historySizeMode, historyViewType, historySort]);
 
   // Clean Architecture Module States
   // Delete Brand and Edit Brand Modal States
@@ -205,6 +242,7 @@ const App: React.FC = () => {
   const [brandSearchTerm, setBrandSearchTerm] = useState('');
   const deferredBrandSearchTerm = useDeferredValue(brandSearchTerm);
   const [brandStatusFilter, setBrandStatusFilter] = useState<'ALL' | 'COMPLETED' | 'IN_PROGRESS' | 'PENDING'>('ALL');
+  const [brandGenderFilter, setBrandGenderFilter] = useState<'ALL' | 'M' | 'F' | 'IM' | 'IF'>('ALL');
   const [expandedBrand, setExpandedBrand] = useState<string | null>(null);
   
   // AI State
@@ -215,10 +253,12 @@ const App: React.FC = () => {
   const [isSaving, setIsSaving] = useState(false);
   
   // Show toast helper
-  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
+  const showToast = useCallback((message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
     setTimeout(() => setToast({ message: '', type: null }), 3000);
-  };
+  }, []);
+
+  const pwaInstall = usePwaInstall(showToast);
 
   // Firestore sync for shared brand statuses across all employees
   useEffect(() => {
@@ -347,6 +387,25 @@ const App: React.FC = () => {
       list = list.filter(b => b.status === 'IN_PROGRESS');
     }
 
+    if (historyGenderFilter !== 'ALL') {
+      list = list.filter(b => b.items.some(i => i.gender === historyGenderFilter));
+    }
+
+    const cleanSz = historySizeFilter.trim().toUpperCase();
+    if (cleanSz) {
+      list = list.filter(b =>
+        b.items.some(i => {
+          if (historyGenderFilter !== 'ALL' && i.gender !== historyGenderFilter) return false;
+          const qty = Number(i.sizes?.[cleanSz]) || 0;
+          if (historySizeMode === 'AVAILABLE') {
+            return qty > 0;
+          }
+          const expected = getDefaultSizesArray(i.gridType, i.gender, i.productType);
+          return expected.includes(cleanSz) && qty === 0;
+        })
+      );
+    }
+
     if (deferredSearchTerm) {
       const low = deferredSearchTerm.toLowerCase().trim();
       list = list.filter(b => 
@@ -366,7 +425,7 @@ const App: React.FC = () => {
     }
 
     return list;
-  }, [brandStats, historyStatusFilter, deferredSearchTerm, historySort]);
+  }, [brandStats, historyStatusFilter, historyGenderFilter, historySizeFilter, historySizeMode, deferredSearchTerm, historySort]);
 
   const completedCount = useMemo(() => brandStats.filter(b => b.status === 'COMPLETED').length, [brandStats]);
   const inProgressCount = useMemo(() => brandStats.filter(b => b.status === 'IN_PROGRESS').length, [brandStats]);
@@ -803,6 +862,34 @@ const App: React.FC = () => {
       setCurrentView(AppView.IDENTIFY);
       showToast(`Salvo! Digite a próxima referência da marca ${currentBrand || 'geral'}`, 'success');
       window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
+
+  const handleSaveAndAnotherColor = async () => {
+    const currentBrand = formData.brand || activeLockedReference?.brand || '';
+    const currentModel = formData.model || '';
+    const success = await saveInventory();
+    if (success) {
+      const nextLock = {
+        barcode: '',
+        brand: currentBrand,
+        model: currentModel,
+        color: '',
+        productType: formData.productType || 'Tênis Adulto Masculino',
+        arrivalMonth: formData.arrivalMonth || (new Date().getMonth() + 1).toString().padStart(2, '0'),
+        arrivalYear: formData.arrivalYear || new Date().getFullYear().toString(),
+        gridType: formData.gridType || 'NUMERIC',
+        sizes: {},
+        total: 0,
+        gender: formData.gender || 'M'
+      };
+      setActiveLockedReference(nextLock);
+      setFormData(nextLock);
+      setEditingId(null);
+      setCurrentView(AppView.COUNT);
+      showToast(`Salvo! Informe a nova cor de ${currentModel || currentBrand}`, 'success');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      setTimeout(() => colorInputRef.current?.focus(), 180);
     }
   };
 
@@ -1385,6 +1472,15 @@ const App: React.FC = () => {
     generateBrandPDF(brandName, items);
   }, [generateBrandPDF]);
 
+  const handleGenerateBrandExcel = useCallback((brandName: string, items: InventoryCount[]) => {
+    if (!items || items.length === 0) {
+      showToast(`A marca ${brandName} ainda não possui contagens registradas.`, 'error');
+      return;
+    }
+    exportBrandToExcel(brandName, items);
+    showToast(`Planilha Excel de ${brandName} baixada com sucesso!`, 'success');
+  }, [showToast]);
+
   const generatePDF = () => {
     const doc = new jsPDF();
     const now = new Date();
@@ -1552,6 +1648,22 @@ const App: React.FC = () => {
       list = list.filter(c => c.status !== 'COMPLETED' && c.status !== 'FINISHED' && !completedBrands[c.brand || '']);
     }
 
+    if (historyGenderFilter !== 'ALL') {
+      list = list.filter(c => c.gender === historyGenderFilter);
+    }
+
+    const cleanSz = historySizeFilter.trim().toUpperCase();
+    if (cleanSz) {
+      list = list.filter(c => {
+        const qty = Number(c.sizes?.[cleanSz]) || 0;
+        if (historySizeMode === 'AVAILABLE') {
+          return qty > 0;
+        }
+        const expected = getDefaultSizesArray(c.gridType, c.gender, c.productType);
+        return expected.includes(cleanSz) && qty === 0;
+      });
+    }
+
     if (deferredSearchTerm) {
       const low = deferredSearchTerm.toLowerCase();
       list = list.filter(c => 
@@ -1591,12 +1703,35 @@ const App: React.FC = () => {
     }
 
     return uniqueList;
-  }, [counts, deferredSearchTerm, historySort, historyStatusFilter, completedBrands]);
+  }, [counts, deferredSearchTerm, historySort, historyStatusFilter, historyGenderFilter, historySizeFilter, historySizeMode, completedBrands]);
 
   // Brand size turnover analysis
   const brandAnalysis = useMemo(() => {
     return computeBrandSizeAnalysis(filteredCounts);
   }, [filteredCounts]);
+
+  const analyticsCategoryData = useMemo(() => {
+    const summary: Record<string, number> = {};
+    counts.forEach(c => {
+      summary[c.productType] = (summary[c.productType] || 0) + c.total;
+    });
+    return Object.entries(summary)
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 5);
+  }, [counts]);
+
+  const analyticsModelData = useMemo(() => {
+    const summary: Record<string, number> = {};
+    counts.forEach(c => {
+      const key = `${c.model} (${(c.productType || '').substring(0, 3)})`;
+      summary[key] = (summary[key] || 0) + c.total;
+    });
+    return Object.entries(summary)
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 5);
+  }, [counts]);
 
   if (authLoading) {
     return (
@@ -1704,15 +1839,15 @@ const App: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen flex flex-col max-w-lg sm:max-w-xl md:max-w-4xl lg:max-w-6xl xl:max-w-7xl mx-auto w-full bg-brand-slate shadow-2xl relative overflow-x-hidden font-sans">
+    <div className="min-h-screen flex flex-col max-w-lg sm:max-w-xl md:max-w-4xl lg:max-w-6xl xl:max-w-7xl mx-auto w-full bg-brand-slate dark:bg-slate-950 dark:text-slate-100 shadow-2xl relative overflow-x-hidden font-sans transition-colors duration-200">
       {/* HEADER (No Print) */}
-      <header className="no-print bg-slate-950/95 backdrop-blur-md border-b border-slate-800 text-white py-3 px-4 sm:px-6 sticky top-0 z-50 flex items-center justify-between shadow-xl">
+      <header className="no-print bg-slate-950/95 backdrop-blur-md border-b border-slate-800 text-white py-2.5 sm:py-3 px-4 sm:px-6 sticky top-0 z-50 flex items-center justify-between gap-3 shadow-xl">
         <div 
           onClick={() => setCurrentView(AppView.HOME)}
           className="flex items-center gap-2.5 sm:gap-3 cursor-pointer group shrink-0"
           title="Ir para a Página Inicial"
         >
-          <div className="w-12 h-12 sm:w-14 sm:h-14 bg-white rounded-full flex items-center justify-center shadow-lg border-2 border-white/20 overflow-hidden shrink-0 group-hover:scale-105 transition-transform p-0.5">
+          <div className="w-11 h-11 sm:w-13 sm:h-13 bg-white rounded-full flex items-center justify-center shadow-lg border-2 border-white/20 overflow-hidden shrink-0 group-hover:scale-105 transition-transform p-0.5">
             <svg viewBox="0 0 100 100" className="w-full h-full">
               <circle cx="50" cy="50" r="50" fill="#ffffff" />
               <path d="M -10 66 Q 50 54 110 66 L 110 110 L -10 110 Z" fill="#1D2B5B" />
@@ -1724,26 +1859,128 @@ const App: React.FC = () => {
           </div>
           <div className="flex flex-col justify-center">
             <div className="flex items-center gap-2">
-              <h1 className="font-display font-black text-base sm:text-xl uppercase tracking-tight leading-none text-white group-hover:text-emerald-400 transition-colors">
+              <h1 className="font-display font-black text-base sm:text-lg uppercase tracking-tight leading-none text-white group-hover:text-emerald-400 transition-colors">
                 A Ideal Tecidos
               </h1>
               <span className="hidden sm:inline-block px-2 py-0.5 rounded-full bg-brand-red/20 text-red-400 border border-brand-red/30 text-[9px] font-black uppercase tracking-wider">
                 Estoque
               </span>
             </div>
-            <p className="text-[10px] sm:text-xs font-black uppercase tracking-wider text-blue-300 mt-1 leading-none">
+            <p className="text-[10px] font-black uppercase tracking-wider text-blue-300 mt-0.5 leading-none">
               Calçados e Confecções
             </p>
-            <p className="text-[9px] sm:text-[10.5px] font-bold text-amber-300 italic mt-0.5 leading-none">
+            <p className="hidden sm:block text-[10px] font-bold text-amber-300 italic mt-0.5 leading-none">
               "A Loja da Sua Família"
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
-          <button 
+        {/* Desktop & Tablet Top Navigation Bar */}
+        <nav className="hidden md:flex items-center gap-1 bg-slate-900/90 border border-slate-800 p-1 rounded-2xl">
+          <button
+            type="button"
+            onClick={() => setCurrentView(AppView.HOME)}
+            className={`px-3 py-2 rounded-xl text-[11px] font-black uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer ${
+              currentView === AppView.HOME ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-300 hover:text-white hover:bg-slate-800/80'
+            }`}
+          >
+            <Home size={14} />
+            Início
+          </button>
+          <button
+            type="button"
+            onClick={() => setCurrentView(AppView.INVENTORIES)}
+            className={`px-3 py-2 rounded-xl text-[11px] font-black uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer ${
+              currentView === AppView.INVENTORIES ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-300 hover:text-white hover:bg-slate-800/80'
+            }`}
+          >
+            <ClipboardList size={14} />
+            Marcas
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setPurchasingInitialPriority('ALL');
+              setCurrentView(AppView.PURCHASING);
+            }}
+            className={`px-3 py-2 rounded-xl text-[11px] font-black uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer ${
+              currentView === AppView.PURCHASING ? 'bg-amber-400 text-slate-950 shadow-sm' : 'text-amber-300 hover:text-white hover:bg-amber-950/70'
+            }`}
+          >
+            <ShoppingCart size={14} />
+            Compras
+          </button>
+          <button
+            type="button"
+            onClick={() => setCurrentView(AppView.ANALYTICS)}
+            className={`px-3 py-2 rounded-xl text-[11px] font-black uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer ${
+              currentView === AppView.ANALYTICS ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-300 hover:text-white hover:bg-slate-800/80'
+            }`}
+          >
+            <BrainCircuit size={14} />
+            Análise
+          </button>
+          <button
+            type="button"
             onClick={() => setCurrentView(AppView.DASHBOARD)}
-            className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all active:scale-95 border ${
+            className={`px-3 py-2 rounded-xl text-[11px] font-black uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer ${
+              currentView === AppView.DASHBOARD ? 'bg-emerald-500 text-slate-950 shadow-sm' : 'text-emerald-300 hover:text-white hover:bg-emerald-950/80'
+            }`}
+          >
+            <BarChart3 size={14} />
+            Dashboard
+          </button>
+          <button
+            type="button"
+            onClick={generatePDF}
+            className="px-3 py-2 rounded-xl text-[11px] font-black uppercase tracking-wider flex items-center gap-1.5 text-rose-300 hover:text-white hover:bg-rose-950/60 transition-all cursor-pointer"
+            title="Gerar PDF Geral do Estoque"
+          >
+            <Download size={14} />
+            PDF
+          </button>
+        </nav>
+
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={() => setDarkMode(prev => !prev)}
+            className="flex items-center justify-center w-9 h-9 rounded-xl bg-slate-800/90 hover:bg-slate-700 text-amber-300 dark:text-amber-300 border border-slate-700/80 transition-all active:scale-95 cursor-pointer"
+            title={darkMode ? 'Alternar para Modo Claro' : 'Alternar para Modo Escuro'}
+            aria-label={darkMode ? 'Alternar para Modo Claro' : 'Alternar para Modo Escuro'}
+          >
+            {darkMode ? <Sun size={16} /> : <Moon size={16} />}
+          </button>
+          {!pwaInstall.isStandalone && (
+            <button
+              type="button"
+              onClick={pwaInstall.triggerInstall}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-[10px] sm:text-xs font-black uppercase tracking-wider transition-all active:scale-95 border bg-blue-600/20 hover:bg-blue-600/40 text-blue-200 border-blue-400/30 cursor-pointer"
+              title="Instalar App no Celular ou PC"
+            >
+              <Smartphone size={14} />
+              <span className="hidden sm:inline">Instalar</span>
+            </button>
+          )}
+          <button 
+            type="button"
+            onClick={() => {
+              setPurchasingInitialPriority('ALL');
+              setCurrentView(AppView.PURCHASING);
+            }}
+            className={`md:hidden flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all active:scale-95 border ${
+              currentView === AppView.PURCHASING
+                ? 'bg-amber-500 text-slate-950 border-amber-300 shadow-md'
+                : 'bg-amber-950/60 hover:bg-amber-900/60 text-amber-300 border-amber-500/30'
+            }`}
+            title="Central de Compras e Grade Furada"
+          >
+            <ShoppingCart size={15} />
+          </button>
+          <button 
+            type="button"
+            onClick={() => setCurrentView(AppView.DASHBOARD)}
+            className={`md:hidden flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all active:scale-95 border ${
               currentView === AppView.DASHBOARD
                 ? 'bg-emerald-600 text-white border-emerald-400 shadow-md shadow-emerald-950/50'
                 : 'bg-emerald-950/60 hover:bg-emerald-900/60 text-emerald-300 border-emerald-500/30'
@@ -1751,24 +1988,24 @@ const App: React.FC = () => {
             title="Abrir Dashboard"
           >
             <BarChart3 size={15} />
-            <span className="hidden sm:inline">Dashboard</span>
           </button>
           <OfflineSyncBadge userId={currentUserId} showToast={showToast} />
           {currentView !== AppView.HOME && (
             <button 
+              type="button"
               onClick={() => setCurrentView(AppView.HOME)}
-              className="flex items-center gap-1 px-2.5 sm:px-3 py-1.5 bg-slate-800/80 hover:bg-slate-700 text-slate-200 border border-slate-700/80 rounded-xl text-xs font-black uppercase tracking-wider transition-all active:scale-95"
+              className="md:hidden flex items-center gap-1 px-2.5 py-1.5 bg-slate-800/80 hover:bg-slate-700 text-slate-200 border border-slate-700/80 rounded-xl text-xs font-black uppercase tracking-wider transition-all active:scale-95"
               title="Voltar ao Início"
             >
               <Home size={15} />
-              <span className="hidden md:inline">Início</span>
             </button>
           )}
         </div>
       </header>
 
       {/* VIEWS */}
-      <main className="flex-1 p-3.5 sm:p-5 md:p-6 pb-28 sm:pb-32 no-print space-y-5 sm:space-y-8">
+      <main className="flex-1 p-3.5 sm:p-5 md:p-6 pb-28 md:pb-12 no-print space-y-5 sm:space-y-8">
+        <PwaInstallBanner {...pwaInstall} />
         <AnimatePresence mode="wait">
           {currentView === AppView.HOME && (
             <motion.div 
@@ -1782,15 +2019,15 @@ const App: React.FC = () => {
               <div className="grid grid-cols-2 gap-3 sm:gap-5">
                 <motion.div 
                   whileHover={{ y: -4 }}
-                  className="bg-white p-4 sm:p-6 rounded-2xl sm:rounded-[2.5rem] shadow-modern border border-gray-100 flex flex-col justify-between overflow-hidden relative group"
+                  className="bg-white dark:bg-slate-900 p-4 sm:p-6 rounded-2xl sm:rounded-[2.5rem] shadow-modern border border-gray-100 dark:border-slate-800 flex flex-col justify-between overflow-hidden relative group"
                 >
-                  <div className="absolute top-0 right-0 w-32 h-32 bg-brand-slate rounded-full -mr-16 -mt-16 group-hover:scale-150 transition-transform duration-1000 ease-out"></div>
-                  <div className="mb-4 sm:mb-6 bg-brand-blue/5 w-10 h-10 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl flex items-center justify-center text-brand-blue relative z-10 border border-brand-blue/5">
+                  <div className="absolute top-0 right-0 w-32 h-32 bg-brand-slate dark:bg-slate-800/50 rounded-full -mr-16 -mt-16 group-hover:scale-150 transition-transform duration-1000 ease-out"></div>
+                  <div className="mb-4 sm:mb-6 bg-brand-blue/5 dark:bg-blue-500/15 w-10 h-10 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl flex items-center justify-center text-brand-blue dark:text-blue-400 relative z-10 border border-brand-blue/5 dark:border-blue-500/20">
                     <LayoutGrid size={20} strokeWidth={2.5} className="sm:w-[22px] sm:h-[22px]" />
                   </div>
                   <div className="relative z-10">
-                    <span className="text-[9px] sm:text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Registros</span>
-                    <span className="text-2xl sm:text-4xl font-display font-black text-brand-dark tracking-tighter">{counts.length}</span>
+                    <span className="text-[9px] sm:text-[10px] font-black text-gray-400 dark:text-slate-400 uppercase tracking-widest block mb-1">Registros</span>
+                    <span className="text-2xl sm:text-4xl font-display font-black text-brand-dark dark:text-white tracking-tighter">{counts.length}</span>
                   </div>
                 </motion.div>
                 
@@ -1846,57 +2083,109 @@ const App: React.FC = () => {
               </motion.div>
 
               <div className="flex flex-col gap-3.5 sm:gap-5">
-
-                {/* DASHBOARD PROFISSIONAL ACTION CARD */}
-                <motion.button 
-                  whileTap={{ scale: 0.98 }}
-                  onClick={() => setCurrentView(AppView.DASHBOARD)}
-                  className="relative overflow-hidden bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white p-4 sm:p-6 rounded-2xl sm:rounded-[2rem] shadow-2xl shadow-indigo-950/40 flex items-center justify-between group active:brightness-95 transition-all text-left border-2 border-indigo-500/30"
-                >
-                  <div className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/10 to-white/0 -translate-x-full group-hover:translate-x-full transition-transform duration-1000"></div>
-                  <div className="flex items-center gap-3 sm:gap-4 min-w-0 pr-2">
-                    <div className="bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 w-10 h-10 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform duration-300 shadow-inner">
-                      <BarChart3 size={22} strokeWidth={2.5} className="sm:w-7 sm:h-7" />
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 sm:gap-5">
+                  {/* DASHBOARD PROFISSIONAL ACTION CARD */}
+                  <motion.button 
+                    whileTap={{ scale: 0.98 }}
+                    onClick={() => setCurrentView(AppView.DASHBOARD)}
+                    className="relative overflow-hidden bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white p-4 sm:p-6 rounded-2xl sm:rounded-[2rem] shadow-2xl shadow-indigo-950/30 flex items-center justify-between group active:brightness-95 transition-all text-left border-2 border-indigo-500/30 cursor-pointer"
+                  >
+                    <div className="flex items-center gap-3 sm:gap-4 min-w-0 pr-2">
+                      <div className="bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 w-10 h-10 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform duration-300 shadow-inner">
+                        <BarChart3 size={22} strokeWidth={2.5} className="sm:w-7 sm:h-7" />
+                      </div>
+                      <div className="font-display min-w-0">
+                        <span className="text-base sm:text-xl font-black tracking-tight uppercase leading-none mb-1 flex items-center gap-1.5 flex-wrap">
+                          DASHBOARD
+                          <span className="bg-emerald-400 text-slate-950 text-[8px] sm:text-[9px] px-1.5 sm:px-2 py-0.5 rounded-full font-extrabold uppercase whitespace-nowrap">Profissional</span>
+                        </span>
+                        <span className="block text-[9px] sm:text-[10px] font-bold text-slate-300 uppercase tracking-wide leading-tight">Métricas, Gráficos e Top Marcas</span>
+                      </div>
                     </div>
-                    <div className="font-display min-w-0">
-                      <span className="text-base sm:text-xl font-black tracking-tight uppercase leading-none mb-1 flex items-center gap-1.5 flex-wrap">
-                        DASHBOARD
-                        <span className="bg-emerald-400 text-slate-950 text-[8px] sm:text-[9px] px-1.5 sm:px-2 py-0.5 rounded-full font-extrabold uppercase whitespace-nowrap">Profissional</span>
-                      </span>
-                      <span className="block text-[9px] sm:text-[10px] font-bold text-slate-300 uppercase tracking-wide leading-tight">Métricas, Gráficos, Top Marcas e Modelos</span>
+                    <div className="px-3 sm:px-3.5 py-1.5 bg-emerald-500 text-slate-950 font-black uppercase text-[9px] sm:text-[10px] tracking-wider rounded-xl shadow-md group-hover:bg-emerald-400 transition-colors shrink-0">
+                      Abrir
                     </div>
-                  </div>
-                  <div className="px-3 sm:px-3.5 py-1.5 bg-emerald-500 text-slate-950 font-black uppercase text-[9px] sm:text-[10px] tracking-wider rounded-xl shadow-md group-hover:bg-emerald-400 transition-colors shrink-0">
-                    Abrir
-                  </div>
-                </motion.button>
+                  </motion.button>
 
-
-
-                <motion.button 
-                  whileTap={{ scale: 0.98 }}
-                  onClick={handleStartNew}
-                  className="relative overflow-hidden bg-brand-red text-white p-4 sm:p-6 rounded-2xl sm:rounded-[2rem] shadow-2xl shadow-brand-red/30 flex items-center justify-between group active:brightness-95 transition-all"
-                >
-                  <div className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/10 to-white/0 -translate-x-full group-hover:translate-x-full transition-transform duration-1000"></div>
-                  <div className="flex items-center gap-3 sm:gap-4 min-w-0 pr-2">
-                    <div className="bg-white/20 w-10 h-10 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl flex items-center justify-center shrink-0 group-hover:rotate-90 transition-transform duration-500 shadow-inner">
-                      <Plus size={22} strokeWidth={3} className="sm:w-7 sm:h-7" />
+                  <motion.button 
+                    whileTap={{ scale: 0.98 }}
+                    onClick={handleStartNew}
+                    className="relative overflow-hidden bg-brand-red text-white p-4 sm:p-6 rounded-2xl sm:rounded-[2rem] shadow-2xl shadow-brand-red/25 flex items-center justify-between group active:brightness-95 transition-all cursor-pointer"
+                  >
+                    <div className="flex items-center gap-3 sm:gap-4 min-w-0 pr-2">
+                      <div className="bg-white/20 w-10 h-10 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl flex items-center justify-center shrink-0 group-hover:rotate-90 transition-transform duration-500 shadow-inner">
+                        <Plus size={22} strokeWidth={3} className="sm:w-7 sm:h-7" />
+                      </div>
+                      <div className="text-left font-display min-w-0">
+                        <span className="block text-base sm:text-xl font-black tracking-tight uppercase leading-tight mb-0.5">Nova Contagem Manual</span>
+                        <span className="block text-[9px] sm:text-[10px] font-bold text-white/70 uppercase tracking-wide leading-tight">Registrar sem código de barras</span>
+                      </div>
                     </div>
-                    <div className="text-left font-display min-w-0">
-                      <span className="block text-base sm:text-xl font-black tracking-tight uppercase leading-tight mb-0.5">Nova Contagem Manual</span>
-                      <span className="block text-[9px] sm:text-[10px] font-bold text-white/50 uppercase tracking-wide leading-tight">Registrar sem código</span>
+                    <PlusCircle size={22} className="text-white/30 group-hover:text-white/60 transition-colors shrink-0" />
+                  </motion.button>
+                </div>
+
+                {/* Quick Actions: Central de Compras & Exportar Excel Geral */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPurchasingInitialPriority('ALL');
+                      setCurrentView(AppView.PURCHASING);
+                    }}
+                    className="bg-amber-50 hover:bg-amber-100/90 dark:bg-amber-950/30 dark:hover:bg-amber-950/50 border border-amber-200 dark:border-amber-800/60 p-4 rounded-2xl flex items-center justify-between gap-3 transition-all active:scale-[0.99] cursor-pointer text-left shadow-xs"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-10 h-10 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-sm">
+                        <ShoppingCart size={18} strokeWidth={2.5} />
+                      </div>
+                      <div className="min-w-0">
+                        <span className="block font-display font-black text-xs sm:text-sm uppercase text-amber-950 dark:text-amber-200 truncate">
+                          Central de Compras & Grade Furada
+                        </span>
+                        <span className="block text-[10px] font-bold text-amber-700 dark:text-amber-400 truncate">
+                          Ver numerações zeradas, baixas e reposição
+                        </span>
+                      </div>
                     </div>
-                  </div>
-                  <PlusCircle size={22} className="text-white/20 group-hover:text-white/40 transition-colors shrink-0" />
-                </motion.button>
+                    <ArrowRight size={16} className="text-amber-600 dark:text-amber-400 shrink-0" />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (counts.length === 0) {
+                        showToast('Nenhum registro para exportar', 'error');
+                        return;
+                      }
+                      exportAllInventoryToExcel(counts);
+                      showToast('Planilha Excel Geral baixada com sucesso!', 'success');
+                    }}
+                    className="bg-emerald-50 hover:bg-emerald-100/90 dark:bg-emerald-950/30 dark:hover:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800/60 p-4 rounded-2xl flex items-center justify-between gap-3 transition-all active:scale-[0.99] cursor-pointer text-left shadow-xs"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+                        <FileSpreadsheet size={18} strokeWidth={2.5} />
+                      </div>
+                      <div className="min-w-0">
+                        <span className="block font-display font-black text-xs sm:text-sm uppercase text-emerald-950 dark:text-emerald-200 truncate">
+                          Baixar Excel Geral (.xlsx)
+                        </span>
+                        <span className="block text-[10px] font-bold text-emerald-700 dark:text-emerald-400 truncate">
+                          Resumo por marca, modelos e grade detalhada
+                        </span>
+                      </div>
+                    </div>
+                    <Download size={16} className="text-emerald-600 dark:text-emerald-400 shrink-0" />
+                  </button>
+                </div>
 
                 <div className="relative group">
-                  <Search className="absolute left-4 sm:left-6 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-brand-accent transition-colors" size={18} />
+                  <Search className="absolute left-4 sm:left-6 top-1/2 -translate-y-1/2 text-gray-400 dark:text-slate-500 group-focus-within:text-brand-accent transition-colors" size={18} />
                   <input 
                     type="text"
-                    placeholder="Filtrar por produto, marca..."
-                    className="w-full pl-12 sm:pl-16 pr-10 sm:pr-12 py-4 sm:py-6 bg-white rounded-2xl sm:rounded-[2.2rem] shadow-modern border border-gray-100 focus:border-brand-accent/30 focus:ring-4 focus:ring-brand-accent/5 focus:outline-none transition-all text-sm sm:text-base font-bold placeholder:text-gray-300"
+                    placeholder="Filtrar por produto, marca, modelo ou cor..."
+                    className="w-full pl-12 sm:pl-16 pr-10 sm:pr-12 py-4 sm:py-5 bg-white dark:bg-slate-900 rounded-2xl sm:rounded-[2.2rem] shadow-modern border border-gray-100 dark:border-slate-800 focus:border-brand-accent/30 focus:ring-4 focus:ring-brand-accent/5 focus:outline-none transition-all text-sm sm:text-base font-bold text-brand-dark dark:text-white placeholder:text-gray-300 dark:placeholder:text-slate-600"
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                   />
@@ -1905,35 +2194,35 @@ const App: React.FC = () => {
                       initial={{ opacity: 0, scale: 0.5 }}
                       animate={{ opacity: 1, scale: 1 }}
                       onClick={() => setSearchTerm('')}
-                      className="absolute right-4 sm:right-6 top-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center bg-gray-50 text-gray-400 hover:text-brand-red rounded-full transition-colors active:scale-90"
+                      className="absolute right-4 sm:right-6 top-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center bg-gray-50 dark:bg-slate-800 text-gray-400 hover:text-brand-red rounded-full transition-colors active:scale-90"
                     >
-                      <XCircle size={18} fill="currentColor" className="text-white" />
+                      <XCircle size={18} fill="currentColor" className="text-white dark:text-slate-300" />
                     </motion.button>
                   )}
                 </div>
               </div>
 
-              <div className="space-y-6">
-                <div className="flex items-center justify-between px-3 flex-wrap gap-2">
+              <div className="space-y-4 sm:space-y-5">
+                <div className="flex items-center justify-between px-1 sm:px-3 flex-wrap gap-2">
                   <div className="flex items-center gap-2">
-                    <div className="bg-brand-dark/5 p-2 rounded-lg text-brand-dark/30">
+                    <div className="bg-brand-dark/5 dark:bg-slate-800 p-2 rounded-lg text-brand-dark/40 dark:text-slate-400">
                       <History size={14} strokeWidth={3} />
                     </div>
                     <div>
-                      <h2 className="text-brand-dark font-black text-xs uppercase tracking-[0.2em] opacity-40">Histórico de Contagens</h2>
+                      <h2 className="text-brand-dark dark:text-slate-300 font-black text-xs uppercase tracking-[0.2em] opacity-60 dark:opacity-100">Histórico de Contagens</h2>
                     </div>
                   </div>
 
                   <div className="flex items-center gap-2 flex-wrap">
                     {/* View Type Toggle: Por Marca vs Por Lote */}
-                    <div className="flex items-center bg-brand-dark/10 p-1 rounded-2xl border border-brand-dark/10 text-[10px] font-black shadow-2xs">
+                    <div className="flex items-center bg-brand-dark/10 dark:bg-slate-900 p-1 rounded-2xl border border-brand-dark/10 dark:border-slate-800 text-[10px] font-black shadow-2xs">
                       <button
                         type="button"
                         onClick={() => setHistoryViewType('BRANDS')}
-                        className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1 ${
+                        className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1 cursor-pointer ${
                           historyViewType === 'BRANDS'
-                            ? 'bg-brand-dark text-white shadow-xs'
-                            : 'text-gray-600 hover:text-brand-dark'
+                            ? 'bg-brand-dark dark:bg-white text-white dark:text-slate-950 shadow-xs'
+                            : 'text-gray-600 dark:text-slate-400 hover:text-brand-dark dark:hover:text-white'
                         }`}
                         title="Exibir resumo das marcas no histórico"
                       >
@@ -1943,27 +2232,27 @@ const App: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => setHistoryViewType('ITEMS')}
-                        className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1 ${
+                        className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1 cursor-pointer ${
                           historyViewType === 'ITEMS'
-                            ? 'bg-brand-dark text-white shadow-xs'
-                            : 'text-gray-600 hover:text-brand-dark'
+                            ? 'bg-brand-dark dark:bg-white text-white dark:text-slate-950 shadow-xs'
+                            : 'text-gray-600 dark:text-slate-400 hover:text-brand-dark dark:hover:text-white'
                         }`}
                         title="Exibir lotes individuais"
                       >
                         <Package size={12} />
-                        Por Lote ({counts.length})
+                        Por Lote ({filteredCounts.length})
                       </button>
                     </div>
 
                     {/* Status Filter Selector */}
-                    <div className="flex items-center bg-gray-100/80 p-1 rounded-2xl border border-gray-200/80 text-[10px] font-black shadow-2xs">
+                    <div className="flex items-center bg-gray-100/80 dark:bg-slate-900 p-1 rounded-2xl border border-gray-200/80 dark:border-slate-800 text-[10px] font-black shadow-2xs">
                       <button
                         type="button"
                         onClick={() => setHistoryStatusFilter('ALL')}
-                        className={`px-3 py-1.5 rounded-xl transition-all ${
+                        className={`px-3 py-1.5 rounded-xl transition-all cursor-pointer ${
                           historyStatusFilter === 'ALL' 
-                            ? 'bg-brand-dark text-white shadow-xs' 
-                            : 'text-gray-500 hover:text-brand-dark'
+                            ? 'bg-brand-dark dark:bg-white text-white dark:text-slate-950 shadow-xs' 
+                            : 'text-gray-500 dark:text-slate-400 hover:text-brand-dark dark:hover:text-white'
                         }`}
                         title="Exibir todas as contagens (concluídas e em andamento)"
                       >
@@ -1972,10 +2261,10 @@ const App: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => setHistoryStatusFilter('COMPLETED')}
-                        className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1 ${
+                        className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1 cursor-pointer ${
                           historyStatusFilter === 'COMPLETED' 
                             ? 'bg-emerald-600 text-white shadow-xs' 
-                            : 'text-gray-500 hover:text-emerald-700'
+                            : 'text-gray-500 dark:text-slate-400 hover:text-emerald-700 dark:hover:text-emerald-400'
                         }`}
                         title="Exibir apenas contagens concluídas"
                       >
@@ -1985,10 +2274,10 @@ const App: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => setHistoryStatusFilter('IN_PROGRESS')}
-                        className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1 ${
+                        className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1 cursor-pointer ${
                           historyStatusFilter === 'IN_PROGRESS' 
                             ? 'bg-amber-500 text-white shadow-xs' 
-                            : 'text-gray-500 hover:text-amber-700'
+                            : 'text-gray-500 dark:text-slate-400 hover:text-amber-700 dark:hover:text-amber-400'
                         }`}
                         title="Exibir contagens em andamento"
                       >
@@ -1998,14 +2287,14 @@ const App: React.FC = () => {
                     </div>
 
                     {/* Sort Selector */}
-                    <div className="flex items-center bg-gray-100/80 p-1 rounded-2xl border border-gray-200/80 text-[10px] font-black shadow-2xs">
+                    <div className="flex items-center bg-gray-100/80 dark:bg-slate-900 p-1 rounded-2xl border border-gray-200/80 dark:border-slate-800 text-[10px] font-black shadow-2xs">
                       <button
                         type="button"
                         onClick={() => setHistorySort('AZ')}
-                        className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
+                        className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer ${
                           historySort === 'AZ' 
-                            ? 'bg-brand-dark text-white shadow-xs' 
-                            : 'text-gray-500 hover:text-brand-dark'
+                            ? 'bg-brand-dark dark:bg-white text-white dark:text-slate-950 shadow-xs' 
+                            : 'text-gray-500 dark:text-slate-400 hover:text-brand-dark dark:hover:text-white'
                         }`}
                         title="Organizar marcas em ordem alfabética (A-Z)"
                       >
@@ -2015,24 +2304,94 @@ const App: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => setHistorySort('DATE')}
-                        className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
+                        className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer ${
                           historySort === 'DATE' 
-                            ? 'bg-brand-dark text-white shadow-xs' 
-                            : 'text-gray-500 hover:text-brand-dark'
+                            ? 'bg-brand-dark dark:bg-white text-white dark:text-slate-950 shadow-xs' 
+                            : 'text-gray-500 dark:text-slate-400 hover:text-brand-dark dark:hover:text-white'
                         }`}
                         title="Organizar pelas contagens mais recentes"
                       >
                         Mais Recentes
                       </button>
                     </div>
+                  </div>
+                </div>
 
-                    {counts.length > 0 && (
-                      <button 
-                        onClick={() => handleDelete('ALL')}
-                        className="flex items-center gap-1.5 py-2 px-3.5 rounded-2xl bg-red-50 text-red-500 hover:bg-brand-red hover:text-white transition-all text-[9px] font-black uppercase tracking-widest shadow-2xs"
+                {/* Smart Filters Bar: Gender & Size Availability/Missing */}
+                <div className="bg-white dark:bg-slate-900 p-3 rounded-2xl border border-gray-100 dark:border-slate-800 shadow-xs flex flex-wrap items-center justify-between gap-2.5">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-[10px] font-black uppercase text-gray-400 dark:text-slate-500 flex items-center gap-1 mr-1">
+                      <Filter size={11} />
+                      Gênero:
+                    </span>
+                    {[
+                      { id: 'ALL', label: 'Todos' },
+                      { id: 'M', label: 'Masc' },
+                      { id: 'F', label: 'Fem' },
+                      { id: 'IM', label: 'Inf.M' },
+                      { id: 'IF', label: 'Inf.F' },
+                    ].map(g => (
+                      <button
+                        key={g.id}
+                        type="button"
+                        onClick={() => setHistoryGenderFilter(g.id as any)}
+                        className={`px-2.5 py-1.5 rounded-xl text-[10px] font-black uppercase transition-all border cursor-pointer ${
+                          historyGenderFilter === g.id
+                            ? 'bg-brand-blue text-white border-brand-blue shadow-xs'
+                            : 'bg-gray-50 dark:bg-slate-800 text-gray-600 dark:text-slate-300 border-gray-200 dark:border-slate-700 hover:bg-gray-100 dark:hover:bg-slate-700'
+                        }`}
                       >
-                        <Trash2 size={12} />
-                        Limpar Tudo
+                        {g.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-[10px] font-black uppercase text-gray-400 dark:text-slate-500">Tam:</span>
+                    <input
+                      type="text"
+                      value={historySizeFilter}
+                      onChange={e => setHistorySizeFilter(e.target.value)}
+                      placeholder="Ex: 38, G..."
+                      className="w-24 sm:w-28 px-2.5 py-1.5 rounded-xl bg-gray-50 dark:bg-slate-800 border border-gray-200 dark:border-slate-700 text-xs font-black text-brand-dark dark:text-white placeholder:text-gray-400 dark:placeholder:text-slate-500 focus:outline-none focus:border-brand-blue uppercase"
+                    />
+                    <div className="flex items-center bg-gray-100 dark:bg-slate-800 p-0.5 rounded-xl border border-gray-200 dark:border-slate-700 text-[10px] font-black">
+                      <button
+                        type="button"
+                        onClick={() => setHistorySizeMode('AVAILABLE')}
+                        className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
+                          historySizeMode === 'AVAILABLE'
+                            ? 'bg-emerald-600 text-white shadow-2xs'
+                            : 'text-gray-500 dark:text-slate-400'
+                        }`}
+                        title="Filtrar itens/marcas que TÊM esta numeração em estoque"
+                      >
+                        Tem
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setHistorySizeMode('MISSING')}
+                        className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
+                          historySizeMode === 'MISSING'
+                            ? 'bg-rose-600 text-white shadow-2xs'
+                            : 'text-gray-500 dark:text-slate-400'
+                        }`}
+                        title="Filtrar itens/marcas onde esta numeração está ZERADA"
+                      >
+                        Falta
+                      </button>
+                    </div>
+                    {(historyGenderFilter !== 'ALL' || historySizeFilter.trim() !== '') && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setHistoryGenderFilter('ALL');
+                          setHistorySizeFilter('');
+                        }}
+                        className="px-2 py-1 text-[10px] font-black uppercase text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg transition-colors cursor-pointer"
+                        title="Limpar filtros de gênero e numeração"
+                      >
+                        Limpar
                       </button>
                     )}
                   </div>
@@ -2040,71 +2399,105 @@ const App: React.FC = () => {
 
               {historyViewType === 'BRANDS' ? (
                 filteredBrandStats.length === 0 ? (
-                  <motion.div 
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    className="text-center py-20 px-8 bg-white rounded-[2.5rem] border border-dashed border-gray-100 space-y-4 shadow-sm"
-                  >
-                    <div className="bg-brand-slate w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-2">
-                      <Package size={32} className="text-gray-200" />
+                  <div className="text-center py-16 px-8 bg-white dark:bg-slate-900 rounded-[2rem] border border-dashed border-gray-200 dark:border-slate-800 space-y-4 shadow-sm">
+                    <div className="bg-brand-slate dark:bg-slate-800 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-2">
+                      <Package size={28} className="text-gray-300 dark:text-slate-600" />
                     </div>
                     <div>
-                      <p className="text-brand-dark font-display font-bold text-lg leading-tight">Nenhuma marca encontrada</p>
-                      <p className="text-gray-400 text-sm">Nenhum lançamento registrado ou os filtros selecionados não retornaram marcas.</p>
+                      <p className="text-brand-dark dark:text-white font-display font-bold text-lg leading-tight">Nenhuma marca encontrada</p>
+                      <p className="text-gray-400 dark:text-slate-400 text-sm">Nenhum lançamento registrado ou os filtros selecionados não retornaram marcas.</p>
                     </div>
-                  </motion.div>
+                  </div>
                 ) : (
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-5">
-                    {filteredBrandStats.map(brand => (
-                      <BrandStatCard
-                        key={brand.name}
-                        brand={brand as BrandStat}
-                        isExpanded={expandedBrand === brand.name}
-                        isCompleted={!!completedBrands[brand.name]}
-                        onToggleExpand={handleToggleExpandBrand}
-                        onStartWithSameBrand={handleStartWithSameBrand}
-                        onToggleBrandCompletion={handleToggleBrandCompletion}
-                        onDeleteBrand={handleDeleteBrand}
-                        onViewBrandPreview={handleViewBrandPreview}
-                        onEditBrand={handleEditBrand}
-                        onGenerateBrandPdf={handleGenerateBrandPdf}
-                        onViewPdfItem={handleViewPdf}
-                        onEditItem={handleEdit}
-                        onDeleteItem={handleDelete}
-                      />
-                    ))}
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-5">
+                      {filteredBrandStats.slice(0, historyVisibleLimit).map(brand => (
+                        <BrandStatCard
+                          key={brand.name}
+                          brand={brand as BrandStat}
+                          isExpanded={expandedBrand === brand.name}
+                          isCompleted={!!completedBrands[brand.name]}
+                          onToggleExpand={handleToggleExpandBrand}
+                          onStartWithSameBrand={handleStartWithSameBrand}
+                          onToggleBrandCompletion={handleToggleBrandCompletion}
+                          onDeleteBrand={handleDeleteBrand}
+                          onViewBrandPreview={handleViewBrandPreview}
+                          onEditBrand={handleEditBrand}
+                          onGenerateBrandPdf={handleGenerateBrandPdf}
+                          onGenerateBrandExcel={handleGenerateBrandExcel}
+                          onViewPdfItem={handleViewPdf}
+                          onEditItem={handleEdit}
+                          onDeleteItem={handleDelete}
+                        />
+                      ))}
+                    </div>
+
+                    {filteredBrandStats.length > historyVisibleLimit && (
+                      <div className="flex justify-center pt-2">
+                        <button
+                          type="button"
+                          onClick={() => setHistoryVisibleLimit(prev => prev + 20)}
+                          className="px-6 py-3 bg-white dark:bg-slate-900 hover:bg-gray-50 dark:hover:bg-slate-800 text-brand-dark dark:text-slate-200 border border-gray-200 dark:border-slate-700 rounded-2xl text-xs font-black uppercase tracking-wider shadow-xs active:scale-95 transition-all cursor-pointer"
+                        >
+                          Carregar mais marcas ({filteredBrandStats.length - historyVisibleLimit} restantes)
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )
               ) : (
                 filteredCounts.length === 0 ? (
-                  <motion.div 
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    className="text-center py-20 px-8 bg-white rounded-[2.5rem] border border-dashed border-gray-100 space-y-4 shadow-sm"
-                  >
-                    <div className="bg-brand-slate w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-2">
-                      <Package size={32} className="text-gray-200" />
+                  <div className="text-center py-16 px-8 bg-white dark:bg-slate-900 rounded-[2rem] border border-dashed border-gray-200 dark:border-slate-800 space-y-4 shadow-sm">
+                    <div className="bg-brand-slate dark:bg-slate-800 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-2">
+                      <Package size={28} className="text-gray-300 dark:text-slate-600" />
                     </div>
                     <div>
-                      <p className="text-brand-dark font-display font-bold text-lg leading-tight">Nenhum registro</p>
-                      <p className="text-gray-400 text-sm">Sua base de movimentações está vazia ou os filtros não retornaram resultados.</p>
+                      <p className="text-brand-dark dark:text-white font-display font-bold text-lg leading-tight">Nenhum registro</p>
+                      <p className="text-gray-400 dark:text-slate-400 text-sm">Sua base de movimentações está vazia ou os filtros não retornaram resultados.</p>
                     </div>
-                  </motion.div>
+                  </div>
                 ) : (
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
-                    {filteredCounts.map((item, index) => (
-                      <InventoryItemCard
-                        key={item.id}
-                        item={item}
-                        index={index}
-                        isCompleted={item.status === 'COMPLETED' || item.status === 'FINISHED' || !!completedBrands[item.brand || '']}
-                        onViewPdf={handleViewPdf}
-                        onEdit={handleEdit}
-                        onDelete={handleDelete}
-                      />
-                    ))}
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-5">
+                      {filteredCounts.slice(0, historyVisibleLimit).map((item, index) => (
+                        <InventoryItemCard
+                          key={item.id}
+                          item={item}
+                          index={index}
+                          isCompleted={item.status === 'COMPLETED' || item.status === 'FINISHED' || !!completedBrands[item.brand || '']}
+                          onViewPdf={handleViewPdf}
+                          onEdit={handleEdit}
+                          onDelete={handleDelete}
+                        />
+                      ))}
+                    </div>
+
+                    {filteredCounts.length > historyVisibleLimit && (
+                      <div className="flex justify-center pt-2">
+                        <button
+                          type="button"
+                          onClick={() => setHistoryVisibleLimit(prev => prev + 20)}
+                          className="px-6 py-3 bg-white dark:bg-slate-900 hover:bg-gray-50 dark:hover:bg-slate-800 text-brand-dark dark:text-slate-200 border border-gray-200 dark:border-slate-700 rounded-2xl text-xs font-black uppercase tracking-wider shadow-xs active:scale-95 transition-all cursor-pointer"
+                        >
+                          Carregar mais lotes ({filteredCounts.length - historyVisibleLimit} restantes)
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )
+              )}
+
+              {counts.length > 0 && (
+                <div className="flex justify-center pt-4">
+                  <button
+                    type="button"
+                    onClick={() => handleDelete('ALL')}
+                    className="flex items-center gap-1.5 py-2 px-4 rounded-xl text-gray-400 dark:text-slate-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 transition-all text-[10px] font-bold uppercase tracking-widest cursor-pointer"
+                  >
+                    <Trash2 size={12} />
+                    Apagar Todo o Histórico
+                  </button>
+                </div>
               )}
             </div>
           </motion.div>
@@ -2154,15 +2547,15 @@ const App: React.FC = () => {
                 </div>
               )}
 
-              <div className="bg-white p-6 sm:p-8 rounded-[2.5rem] shadow-modern-lg space-y-6 border border-white relative overflow-hidden">
-                <div className="absolute top-0 right-0 w-32 h-32 bg-brand-slate rounded-full -mr-16 -mt-16 opacity-50 pointer-events-none"></div>
+              <div className="bg-white dark:bg-slate-900 p-6 sm:p-8 rounded-[2.5rem] shadow-modern-lg space-y-6 border border-white dark:border-slate-800 relative overflow-hidden">
+                <div className="absolute top-0 right-0 w-32 h-32 bg-brand-slate dark:bg-slate-800/40 rounded-full -mr-16 -mt-16 opacity-50 pointer-events-none"></div>
 
                 {/* Pre-fill status indicator & clear form action */}
                 {(formData.brand || formData.model || formData.color) && (
-                  <div className="flex items-center justify-between pb-3 border-b border-gray-100 relative z-10">
+                  <div className="flex items-center justify-between pb-3 border-b border-gray-100 dark:border-slate-800 relative z-10 flex-wrap gap-2">
                     <div className="flex items-center gap-2">
                       <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                      <span className="text-[10px] font-black uppercase tracking-widest text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200">
+                      <span className="text-[10px] font-black uppercase tracking-widest text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/50 px-2.5 py-1 rounded-lg border border-emerald-200 dark:border-emerald-800">
                         ⚡ Dados do último lançamento mantidos
                       </span>
                     </div>
@@ -2184,23 +2577,21 @@ const App: React.FC = () => {
                         });
                         showToast('Formulário limpo para novo modelo', 'success');
                       }}
-                      className="text-[10px] font-black uppercase text-gray-400 hover:text-red-600 transition-colors flex items-center gap-1 active:scale-95 bg-gray-50 hover:bg-red-50 px-3 py-1.5 rounded-xl border border-gray-200 hover:border-red-200"
+                      className="text-[10px] font-black uppercase text-gray-400 dark:text-slate-300 hover:text-red-600 transition-colors flex items-center gap-1 active:scale-95 bg-gray-50 dark:bg-slate-800 hover:bg-red-50 dark:hover:bg-red-950/40 px-3 py-1.5 rounded-xl border border-gray-200 dark:border-slate-700 hover:border-red-200 cursor-pointer"
                     >
                       <RotateCcw size={12} />
                       Limpar Campos
                     </button>
                   </div>
                 )}
-                
 
-
-                {/* Brand Selection with Dropdown */}
+                {/* Brand Selection with Dropdown (includes saved custom brands via allBrandsList) */}
                 <div className="space-y-2 relative z-10">
-                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2">Marca</label>
+                  <label className="text-[10px] font-black text-gray-400 dark:text-slate-400 uppercase tracking-[0.2em] ml-2">Marca</label>
                   <div className="relative group">
                     <select 
-                      className="w-full p-5 bg-brand-slate border border-gray-100 focus:border-brand-accent focus:bg-white rounded-2xl focus:ring-0 focus:outline-none appearance-none font-display font-bold text-lg text-brand-dark transition-all pr-12"
-                      value={formData.brand && DEFAULT_BRANDS_LIST.includes(formData.brand) ? formData.brand : (formData.brand === undefined || formData.brand === "" ? "" : "CUSTOM")}
+                      className="w-full p-5 bg-brand-slate dark:bg-slate-800 border border-gray-100 dark:border-slate-700 focus:border-brand-accent focus:bg-white dark:focus:bg-slate-800 rounded-2xl focus:ring-0 focus:outline-none appearance-none font-display font-bold text-lg text-brand-dark dark:text-white transition-all pr-12"
+                      value={formData.brand && allBrandsList.includes(formData.brand) ? formData.brand : (formData.brand === undefined || formData.brand === "" ? "" : "CUSTOM")}
                       onChange={(e) => {
                         const val = e.target.value;
                         if (val === "CUSTOM") {
@@ -2211,14 +2602,14 @@ const App: React.FC = () => {
                       }}
                     >
                       <option value="">Selecione a Marca...</option>
-                      {DEFAULT_BRANDS_LIST.map(brandName => <option key={brandName} value={brandName}>{brandName}</option>)}
+                      {allBrandsList.map(brandName => <option key={brandName} value={brandName}>{brandName}</option>)}
                       <option value="CUSTOM">+ Outra Marca (Digitar)...</option>
                     </select>
                     <div className="absolute right-5 top-1/2 -translate-y-1/2 pointer-events-none text-brand-accent">
                       <LayoutGrid size={18} strokeWidth={2.5} />
                     </div>
                   </div>
-                  {(formData.brand !== undefined && formData.brand !== "" && !DEFAULT_BRANDS_LIST.includes(formData.brand)) && (
+                  {(formData.brand !== undefined && formData.brand !== "" && !allBrandsList.includes(formData.brand)) && (
                     <motion.div
                       initial={{ opacity: 0, height: 0 }}
                       animate={{ opacity: 1, height: 'auto' }}
@@ -2227,7 +2618,7 @@ const App: React.FC = () => {
                       <input 
                         type="text" 
                         placeholder="Digite o nome da marca personalizada..."
-                        className="w-full p-5 bg-white border-2 border-brand-accent/20 rounded-2xl focus:border-brand-accent focus:outline-none font-bold text-brand-dark shadow-inner text-lg"
+                        className="w-full p-5 bg-white dark:bg-slate-800 border-2 border-brand-accent/20 dark:border-brand-accent/40 rounded-2xl focus:border-brand-accent focus:outline-none font-bold text-brand-dark dark:text-white shadow-inner text-lg"
                         value={formData.brand === " " ? "" : formData.brand}
                         onChange={(e) => setFormData(prev => ({ ...prev, brand: e.target.value }))}
                         autoFocus
@@ -2242,8 +2633,8 @@ const App: React.FC = () => {
 
                 {/* Público / Gênero Selection */}
                 <div className="space-y-2 relative z-10">
-                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2">Público / Gênero</label>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-brand-slate p-2 rounded-2xl border border-gray-100">
+                  <label className="text-[10px] font-black text-gray-400 dark:text-slate-400 uppercase tracking-[0.2em] ml-2">Público / Gênero</label>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-brand-slate dark:bg-slate-800/70 p-2 rounded-2xl border border-gray-100 dark:border-slate-800">
                     {[
                       { id: 'M', code: 'M', label: 'Masculino', color: 'border-blue-500 bg-blue-50 text-blue-700' },
                       { id: 'F', code: 'F', label: 'Feminino', color: 'border-pink-500 bg-pink-50 text-pink-700' },
@@ -2264,14 +2655,14 @@ const App: React.FC = () => {
                               productType: newProductType
                             }));
                           }}
-                          className={`p-3 rounded-xl transition-all flex items-center gap-2.5 text-left border ${
+                          className={`p-3 rounded-xl transition-all flex items-center gap-2.5 text-left border cursor-pointer ${
                             isSelected 
-                              ? `bg-white shadow-md text-brand-dark ${opt.color.split(' ')[0]}` 
-                              : 'bg-white/70 hover:bg-white text-gray-500 border-transparent hover:border-gray-200'
+                              ? `bg-white dark:bg-slate-900 shadow-md text-brand-dark dark:text-white ${opt.color.split(' ')[0]}` 
+                              : 'bg-white/70 dark:bg-slate-900/50 hover:bg-white dark:hover:bg-slate-900 text-gray-500 dark:text-slate-400 border-transparent hover:border-gray-200 dark:hover:border-slate-700'
                           }`}
                         >
                           <span className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-black shrink-0 border ${
-                            isSelected ? opt.color : 'bg-gray-100 text-gray-600 border-gray-200'
+                            isSelected ? opt.color : 'bg-gray-100 dark:bg-slate-800 text-gray-600 dark:text-slate-400 border-gray-200 dark:border-slate-700'
                           }`}>
                             {opt.code}
                           </span>
@@ -2287,22 +2678,22 @@ const App: React.FC = () => {
                 {/* Row: Modelo & Cor */}
                 <div className="grid grid-cols-1 md:grid-cols-12 gap-4 relative z-10">
                   <div className="md:col-span-7 space-y-2">
-                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2">Modelo</label>
+                    <label className="text-[10px] font-black text-gray-400 dark:text-slate-400 uppercase tracking-[0.2em] ml-2">Modelo</label>
                     <input 
                       type="text"
                       placeholder="Ex: Sport..."
-                      className="w-full p-5 bg-brand-slate border border-gray-100 focus:border-brand-accent focus:bg-white rounded-2xl focus:outline-none font-display font-bold text-lg text-brand-dark transition-all"
+                      className="w-full p-5 bg-brand-slate dark:bg-slate-800 border border-gray-100 dark:border-slate-700 focus:border-brand-accent focus:bg-white dark:focus:bg-slate-800 rounded-2xl focus:outline-none font-display font-bold text-lg text-brand-dark dark:text-white transition-all"
                       value={formData.model}
                       onChange={(e) => setFormData(prev => ({ ...prev, model: e.target.value }))}
                     />
                   </div>
                   
                   <div className="md:col-span-5 space-y-2">
-                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2">Cor</label>
+                    <label className="text-[10px] font-black text-gray-400 dark:text-slate-400 uppercase tracking-[0.2em] ml-2">Cor</label>
                     <input 
                       type="text"
                       placeholder="Ex: Azul, Preto..."
-                      className="w-full p-5 bg-brand-slate border border-gray-100 focus:border-brand-accent focus:bg-white rounded-2xl focus:outline-none font-display font-bold text-lg text-brand-dark transition-all"
+                      className="w-full p-5 bg-brand-slate dark:bg-slate-800 border border-gray-100 dark:border-slate-700 focus:border-brand-accent focus:bg-white dark:focus:bg-slate-800 rounded-2xl focus:outline-none font-display font-bold text-lg text-brand-dark dark:text-white transition-all"
                       value={formData.color}
                       onChange={(e) => setFormData(prev => ({ ...prev, color: e.target.value }))}
                     />
@@ -2311,9 +2702,9 @@ const App: React.FC = () => {
 
                 <div className="grid grid-cols-2 gap-4 relative z-10">
                   <div className="space-y-2">
-                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2">Mês Chegada</label>
+                    <label className="text-[10px] font-black text-gray-400 dark:text-slate-400 uppercase tracking-[0.2em] ml-2">Mês Chegada</label>
                     <select 
-                      className="w-full p-5 bg-brand-slate border border-gray-100 focus:border-brand-accent focus:bg-white rounded-2xl focus:outline-none appearance-none font-display font-bold text-lg text-brand-dark transition-all"
+                      className="w-full p-5 bg-brand-slate dark:bg-slate-800 border border-gray-100 dark:border-slate-700 focus:border-brand-accent focus:bg-white dark:focus:bg-slate-800 rounded-2xl focus:outline-none appearance-none font-display font-bold text-lg text-brand-dark dark:text-white transition-all"
                       value={formData.arrivalMonth}
                       onChange={(e) => setFormData(prev => ({ ...prev, arrivalMonth: e.target.value }))}
                     >
@@ -2322,9 +2713,9 @@ const App: React.FC = () => {
                     </select>
                   </div>
                   <div className="space-y-2">
-                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2">Ano Chegada</label>
+                    <label className="text-[10px] font-black text-gray-400 dark:text-slate-400 uppercase tracking-[0.2em] ml-2">Ano Chegada</label>
                     <select 
-                      className="w-full p-5 bg-brand-slate border border-gray-100 focus:border-brand-accent focus:bg-white rounded-2xl focus:outline-none appearance-none font-display font-bold text-lg text-brand-dark transition-all"
+                      className="w-full p-5 bg-brand-slate dark:bg-slate-800 border border-gray-100 dark:border-slate-700 focus:border-brand-accent focus:bg-white dark:focus:bg-slate-800 rounded-2xl focus:outline-none appearance-none font-display font-bold text-lg text-brand-dark dark:text-white transition-all"
                       value={formData.arrivalYear}
                       onChange={(e) => setFormData(prev => ({ ...prev, arrivalYear: e.target.value }))}
                     >
@@ -2335,16 +2726,18 @@ const App: React.FC = () => {
                 </div>
 
                 <div className="pt-4 space-y-4 relative z-10">
-                  <div className="bg-brand-slate p-1.5 rounded-2xl flex gap-1 shadow-inner border border-gray-50">
+                  <div className="bg-brand-slate dark:bg-slate-800 p-1.5 rounded-2xl flex gap-1 shadow-inner border border-gray-50 dark:border-slate-700">
                     <button 
+                      type="button"
                       onClick={() => setFormData(prev => ({ ...prev, gridType: 'LETTER' }))}
-                      className={`flex-1 py-4 rounded-xl text-[9px] font-black uppercase tracking-[0.2em] transition-all ${formData.gridType === 'LETTER' ? 'bg-white text-brand-blue shadow-md' : 'text-gray-400 hover:text-gray-600'}`}
+                      className={`flex-1 py-4 rounded-xl text-[9px] font-black uppercase tracking-[0.2em] transition-all cursor-pointer ${formData.gridType === 'LETTER' ? 'bg-white dark:bg-slate-900 text-brand-blue dark:text-blue-400 shadow-md' : 'text-gray-400 hover:text-gray-600 dark:hover:text-slate-200'}`}
                     >
                       P/M/G
                     </button>
                     <button 
+                      type="button"
                       onClick={() => setFormData(prev => ({ ...prev, gridType: 'NUMERIC' }))}
-                      className={`flex-1 py-4 rounded-xl text-[9px] font-black uppercase tracking-[0.2em] transition-all ${formData.gridType === 'NUMERIC' ? 'bg-white text-brand-blue shadow-md' : 'text-gray-400 hover:text-gray-600'}`}
+                      className={`flex-1 py-4 rounded-xl text-[9px] font-black uppercase tracking-[0.2em] transition-all cursor-pointer ${formData.gridType === 'NUMERIC' ? 'bg-white dark:bg-slate-900 text-brand-blue dark:text-blue-400 shadow-md' : 'text-gray-400 hover:text-gray-600 dark:hover:text-slate-200'}`}
                     >
                       34 a 44
                     </button>
@@ -2357,7 +2750,7 @@ const App: React.FC = () => {
                       setCurrentView(AppView.COUNT);
                       window.scrollTo({ top: 0, behavior: 'smooth' });
                     }}
-                    className="w-full bg-brand-dark text-white py-5 rounded-2xl shadow-xl font-display font-black uppercase text-xs tracking-widest disabled:opacity-30 transition-all hover:bg-brand-blue flex items-center justify-center gap-3"
+                    className="w-full bg-brand-dark dark:bg-brand-blue text-white py-5 rounded-2xl shadow-xl font-display font-black uppercase text-xs tracking-widest disabled:opacity-30 transition-all hover:bg-brand-blue dark:hover:brightness-110 flex items-center justify-center gap-3 cursor-pointer"
                   >
                     <span>Prosseguir</span>
                     <PlusCircle size={18} />
@@ -2411,20 +2804,20 @@ const App: React.FC = () => {
                 </div>
               )}
 
-              <div className="bg-white p-6 rounded-[2rem] shadow-modern border border-gray-50 space-y-6">
+              <div className="bg-white dark:bg-slate-900 p-5 sm:p-6 rounded-[2rem] shadow-modern border border-gray-50 dark:border-slate-800 space-y-5">
                 {/* Header Row */}
-                <div className="flex items-center gap-4 pb-4 border-b border-gray-100">
+                <div className="flex items-center gap-4 pb-4 border-b border-gray-100 dark:border-slate-800">
                   <button 
                     type="button"
                     onClick={() => setCurrentView(AppView.IDENTIFY)} 
-                    className="w-11 h-11 flex items-center justify-center bg-brand-slate hover:bg-brand-blue/10 rounded-2xl text-brand-blue active:scale-95 transition-all border border-gray-100 shrink-0 shadow-sm"
+                    className="w-11 h-11 flex items-center justify-center bg-brand-slate dark:bg-slate-800 hover:bg-brand-blue/10 rounded-2xl text-brand-blue dark:text-blue-400 active:scale-95 transition-all border border-gray-100 dark:border-slate-700 shrink-0 shadow-sm cursor-pointer"
                   >
                     <ChevronLeft size={22} strokeWidth={3} />
                   </button>
                   <div className="min-w-0 flex-1">
-                    <h2 className="text-xl sm:text-2xl font-display font-black text-brand-dark tracking-tighter leading-none mb-1 uppercase">Contagem</h2>
+                    <h2 className="text-xl sm:text-2xl font-display font-black text-brand-dark dark:text-white tracking-tighter leading-none mb-1 uppercase">Contagem</h2>
                     <p className="text-[10px] text-brand-red uppercase font-black tracking-widest opacity-90 flex items-center gap-1.5 flex-wrap">
-                      <span>{formData.productType}</span>
+                      <span>{formData.brand}</span>
                       <span>•</span>
                       <span>{formData.model}</span>
                       {formData.gender && (
@@ -2453,7 +2846,7 @@ const App: React.FC = () => {
                         setCurrentView(AppView.IDENTIFY);
                         showToast('Salvar como Novo Item: Preencha o novo modelo/cor!', 'success');
                       }}
-                      className="px-3.5 py-2.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all flex items-center gap-1.5 shrink-0 shadow-sm"
+                      className="px-3.5 py-2.5 bg-blue-50 dark:bg-blue-950/50 hover:bg-blue-100 dark:hover:bg-blue-900/60 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all flex items-center gap-1.5 shrink-0 shadow-sm cursor-pointer"
                       title="Clique para não alterar o item antigo e sim criar um novo cadastro para esta caixa"
                     >
                       <Plus size={14} strokeWidth={3} />
@@ -2462,48 +2855,66 @@ const App: React.FC = () => {
                     </button>
                   )}
                 </div>
+
+                {/* Inline Quick Color Input for Rapid Multi-Color Counting */}
+                <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 bg-brand-slate/60 dark:bg-slate-800/60 p-3 rounded-2xl border border-gray-100 dark:border-slate-700">
+                  <label className="text-[10px] font-black uppercase tracking-wider text-gray-500 dark:text-slate-400 shrink-0 px-1">
+                    Cor do Lote:
+                  </label>
+                  <input
+                    ref={colorInputRef}
+                    type="text"
+                    value={formData.color || ''}
+                    onChange={(e) => setFormData(prev => ({ ...prev, color: e.target.value }))}
+                    placeholder="Ex: Preto, Branco, Bege..."
+                    className="flex-1 px-3.5 py-2 bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-700 focus:border-brand-blue rounded-xl text-sm font-black text-brand-dark dark:text-white placeholder:text-gray-300 dark:placeholder:text-slate-600 focus:outline-none"
+                  />
+                </div>
                 <div className="space-y-4">
-                  {(() => {
-                    const defaultSizes = getDefaultSizesArray(formData.gridType, formData.gender, formData.productType);
-                    
-                    // Get sizes from formData that aren't in defaults
-                    const customSizes = Object.keys(formData.sizes || {}).filter(s => !defaultSizes.includes(s));
-                    // Sort custom sizes: if numeric grid, try to sort numerically
-                    const sortedCustom = customSizes.sort((a, b) => {
-                      if (formData.gridType === 'NUMERIC') {
-                        const na = parseInt(a, 10);
-                        const nb = parseInt(b, 10);
-                        if (!isNaN(na) && !isNaN(nb)) return na - nb;
-                      }
-                      return a.localeCompare(b);
-                    });
-                    
-                    return [...defaultSizes, ...sortedCustom].map(size => (
-                      <SizeGridRow
-                        key={size}
-                        size={size}
-                        value={formData.sizes?.[size] || 0}
-                        onUpdate={updateSizeCount}
-                        onAdjust={adjustSizeCount}
-                      />
-                    ));
-                  })()}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                    {(() => {
+                      const defaultSizes = getDefaultSizesArray(formData.gridType, formData.gender, formData.productType);
+                      
+                      // Get sizes from formData that aren't in defaults
+                      const customSizes = Object.keys(formData.sizes || {}).filter(s => !defaultSizes.includes(s));
+                      // Sort custom sizes: if numeric grid, try to sort numerically
+                      const sortedCustom = customSizes.sort((a, b) => {
+                        if (formData.gridType === 'NUMERIC') {
+                          const na = parseInt(a, 10);
+                          const nb = parseInt(b, 10);
+                          if (!isNaN(na) && !isNaN(nb)) return na - nb;
+                        }
+                        return a.localeCompare(b);
+                      });
+                      
+                      return [...defaultSizes, ...sortedCustom].map(size => (
+                        <SizeGridRow
+                          key={size}
+                          size={size}
+                          value={formData.sizes?.[size] || 0}
+                          onUpdate={updateSizeCount}
+                          onAdjust={adjustSizeCount}
+                        />
+                      ));
+                    })()}
+                  </div>
                   
                   {/* ADD CUSTOM SIZE SECTION */}
-                  <div className="mt-8 pt-6 border-t border-dashed border-gray-100 space-y-3">
-                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2">Não encontrou o tamanho?</label>
+                  <div className="mt-8 pt-6 border-t border-dashed border-gray-100 dark:border-slate-800 space-y-3">
+                    <label className="text-[10px] font-black text-gray-400 dark:text-slate-400 uppercase tracking-[0.2em] ml-2">Não encontrou o tamanho?</label>
                     <div className="flex gap-2">
                       <input 
                         type="text"
                         placeholder="Ex: EX, 46, 48..."
-                        className="flex-1 p-4 bg-brand-slate/30 border border-transparent focus:border-brand-accent/20 focus:bg-white rounded-xl focus:outline-none font-bold text-brand-dark placeholder:text-gray-300 text-sm"
+                        className="flex-1 p-4 bg-brand-slate/30 dark:bg-slate-800 border border-transparent dark:border-slate-700 focus:border-brand-accent/20 focus:bg-white dark:focus:bg-slate-800 rounded-xl focus:outline-none font-bold text-brand-dark dark:text-white placeholder:text-gray-300 dark:placeholder:text-slate-600 text-sm"
                         value={newSizeInput}
                         onChange={(e) => setNewSizeInput(e.target.value)}
                         onKeyDown={(e) => e.key === 'Enter' && handleAddCustomSize()}
                       />
                       <button 
+                        type="button"
                         onClick={handleAddCustomSize}
-                        className="bg-brand-dark text-white px-6 rounded-xl font-black uppercase text-[10px] tracking-widest active:scale-95 transition-all shadow-lg shadow-brand-dark/10 flex items-center gap-2"
+                        className="bg-brand-dark dark:bg-brand-blue text-white px-6 rounded-xl font-black uppercase text-[10px] tracking-widest active:scale-95 transition-all shadow-lg shadow-brand-dark/10 flex items-center gap-2 cursor-pointer"
                       >
                         <Plus size={16} strokeWidth={3} />
                         Adicionar
@@ -2516,12 +2927,70 @@ const App: React.FC = () => {
                       initial={{ opacity: 0 }}
                       animate={{ opacity: 1 }}
                       onClick={() => setFormData(prev => ({ ...prev, sizes: {}, total: 0 }))}
-                      className="w-full py-4 text-[9px] font-black text-red-400 uppercase tracking-[0.3em] hover:text-red-500 transition-colors flex items-center justify-center gap-2"
+                      className="w-full py-4 text-[9px] font-black text-red-400 uppercase tracking-[0.3em] hover:text-red-500 transition-colors flex items-center justify-center gap-2 cursor-pointer"
                     >
                       <XCircle size={12} />
                       Zerar Grade
                     </motion.button>
                   )}
+                </div>
+              </div>
+
+              {/* Sticky Bottom Quick Save Bar */}
+              <div className="sticky bottom-24 md:bottom-4 z-40 bg-slate-900/95 backdrop-blur-md text-white px-4 py-3 rounded-2xl shadow-2xl border border-slate-700/80 flex flex-wrap items-center justify-between gap-2.5">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-brand-red/20 text-brand-red border border-brand-red/30 flex items-center justify-center shrink-0">
+                    <Package size={18} />
+                  </div>
+                  <div className="leading-tight">
+                    <span className="text-[9px] font-black uppercase tracking-widest text-slate-400 block">Total do Lote</span>
+                    <span className="text-lg font-display font-black text-white">{formData.total} pares</span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    disabled={isSaving}
+                    onClick={handleSaveAndAnotherColor}
+                    className="px-3 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-black uppercase tracking-wider flex items-center gap-1.5 shadow-md active:scale-95 transition-all disabled:opacity-50 cursor-pointer"
+                    title="Salva este lote e limpa só a cor e a grade para contar outra cor do mesmo modelo"
+                  >
+                    <Plus size={14} strokeWidth={3} />
+                    <span>+ Outra Cor</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={isSaving}
+                    onClick={handleSaveAndScanNextReference}
+                    className="px-3.5 py-2.5 rounded-xl bg-brand-red hover:brightness-110 text-white text-[10px] font-black uppercase tracking-wider flex items-center gap-1.5 shadow-md active:scale-95 transition-all disabled:opacity-50 cursor-pointer"
+                  >
+                    {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                    <span>Salvar e Próximo</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={isSaving}
+                    onClick={async () => {
+                      const currentBrand = formData.brand || '';
+                      const success = await saveInventory();
+                      if (success) {
+                        if (currentBrand) {
+                          await toggleBrandCompleted(currentBrand, true);
+                        }
+                        setCurrentView(AppView.INVENTORIES);
+                        showToast(`Marca ${currentBrand || ''} concluída com sucesso!`);
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                      }
+                    }}
+                    className="px-3 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-black uppercase tracking-wider flex items-center gap-1.5 shadow-md active:scale-95 transition-all disabled:opacity-50 cursor-pointer"
+                  >
+                    <CheckCircle2 size={14} />
+                    <span className="hidden sm:inline">Concluir Marca</span>
+                    <span className="sm:hidden">Concluir</span>
+                  </button>
                 </div>
               </div>
 
@@ -2543,7 +3012,7 @@ const App: React.FC = () => {
                     whileTap={{ scale: 0.99 }}
                     disabled={isSaving}
                     onClick={handleSaveAndScanNextReference}
-                    className="w-full bg-gradient-to-r from-red-600 via-brand-red to-rose-700 hover:brightness-110 shadow-xl shadow-brand-red/25 text-white py-5 rounded-[1.5rem] active:scale-[0.98] transition-all flex items-center justify-center gap-3 disabled:opacity-50 font-display border border-red-400/30"
+                    className="w-full bg-gradient-to-r from-red-600 via-brand-red to-rose-700 hover:brightness-110 shadow-xl shadow-brand-red/25 text-white py-5 rounded-[1.5rem] active:scale-[0.98] transition-all flex items-center justify-center gap-3 disabled:opacity-50 font-display border border-red-400/30 cursor-pointer"
                   >
                     {isSaving ? (
                       <Loader2 size={22} className="animate-spin" />
@@ -2558,6 +3027,20 @@ const App: React.FC = () => {
                         {formData.brand ? `Continuar em ${formData.brand} • Próxima Referência` : 'Salvar e Ir para o Próximo'}
                       </span>
                     </div>
+                  </motion.button>
+
+                  {/* Option 1B: Save & Another Color of Same Model */}
+                  <motion.button 
+                    whileHover={{ scale: 1.01 }}
+                    whileTap={{ scale: 0.99 }}
+                    disabled={isSaving}
+                    onClick={handleSaveAndAnotherColor}
+                    className="w-full bg-indigo-600 hover:bg-indigo-500 shadow-xl shadow-indigo-600/25 text-white py-4 rounded-[1.5rem] active:scale-[0.98] transition-all flex items-center justify-center gap-3 disabled:opacity-50 font-display cursor-pointer"
+                  >
+                    <PlusCircle size={20} strokeWidth={2.5} />
+                    <span className="text-xs font-black uppercase tracking-[0.12em]">
+                      Salvar e Contar Outra Cor ({formData.model || 'Mesmo Modelo'})
+                    </span>
                   </motion.button>
 
                   {/* Option 2: Save & Conclude Brand */}
@@ -2577,7 +3060,7 @@ const App: React.FC = () => {
                         window.scrollTo({ top: 0, behavior: 'smooth' });
                       }
                     }}
-                    className="w-full bg-emerald-600 hover:bg-emerald-500 shadow-xl shadow-emerald-600/25 text-white py-4 rounded-[1.5rem] active:scale-[0.98] transition-all flex items-center justify-center gap-3 disabled:opacity-50 font-display"
+                    className="w-full bg-emerald-600 hover:bg-emerald-500 shadow-xl shadow-emerald-600/25 text-white py-4 rounded-[1.5rem] active:scale-[0.98] transition-all flex items-center justify-center gap-3 disabled:opacity-50 font-display cursor-pointer"
                   >
                     <CheckCircle2 size={22} strokeWidth={2.5} />
                     <span className="text-xs font-black uppercase tracking-[0.12em]">
@@ -2599,7 +3082,7 @@ const App: React.FC = () => {
                           showToast(`Salvo! Digite o próximo modelo da marca ${currentBrand}`);
                         }
                       }}
-                      className="bg-white/10 hover:bg-white/20 text-white py-3.5 px-3 rounded-[1.2rem] border border-white/10 active:scale-[0.98] transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                      className="bg-white/10 hover:bg-white/20 text-white py-3.5 px-3 rounded-[1.2rem] border border-white/10 active:scale-[0.98] transition-all flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer"
                     >
                       <Edit2 size={16} strokeWidth={2.5} />
                       <span className="text-[10px] font-black uppercase tracking-[0.08em] text-center">Digitar Modelo</span>
@@ -2617,7 +3100,7 @@ const App: React.FC = () => {
                           showToast('Salvo! Selecione uma nova marca');
                         }
                       }}
-                      className="bg-white/10 hover:bg-white/20 text-white py-3.5 px-3 rounded-[1.2rem] border border-white/10 active:scale-[0.98] transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                      className="bg-white/10 hover:bg-white/20 text-white py-3.5 px-3 rounded-[1.2rem] border border-white/10 active:scale-[0.98] transition-all flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer"
                     >
                       <PlusCircle size={16} strokeWidth={2.5} />
                       <span className="text-[10px] font-black uppercase tracking-[0.08em] text-center">Outra Marca</span>
@@ -2637,7 +3120,7 @@ const App: React.FC = () => {
                           window.scrollTo({ top: 0, behavior: 'smooth' });
                         }
                       }}
-                      className="bg-white/10 hover:bg-white/20 text-white py-4 rounded-[1.2rem] border border-white/10 active:scale-[0.98] transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                      className="bg-white/10 hover:bg-white/20 text-white py-4 rounded-[1.2rem] border border-white/10 active:scale-[0.98] transition-all flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer"
                     >
                       <Home size={16} strokeWidth={2.5} />
                       <span className="text-[10px] font-black uppercase tracking-[0.08em] text-center">Ir para o Início</span>
@@ -2656,7 +3139,7 @@ const App: React.FC = () => {
                           window.scrollTo({ top: 0, behavior: 'smooth' });
                         }
                       }}
-                      className="bg-white/10 hover:bg-white/20 text-white py-4 rounded-[1.2rem] border border-white/10 active:scale-[0.98] transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                      className="bg-white/10 hover:bg-white/20 text-white py-4 rounded-[1.2rem] border border-white/10 active:scale-[0.98] transition-all flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer"
                     >
                       <Eye size={16} strokeWidth={2.5} />
                       <span className="text-[10px] font-black uppercase tracking-[0.08em] text-center">Ver Comprovante</span>
@@ -2676,18 +3159,18 @@ const App: React.FC = () => {
               className="space-y-6 pb-12"
             >
               {/* Header */}
-              <div className="bg-white p-6 rounded-[2rem] shadow-modern border border-gray-50 flex items-center justify-between">
+              <div className="bg-white dark:bg-slate-900 p-6 rounded-[2rem] shadow-modern border border-gray-50 dark:border-slate-800 flex items-center justify-between">
                 <div className="flex items-center gap-4">
                   <button 
                     type="button"
                     onClick={() => setCurrentView(AppView.HOME)} 
-                    className="w-11 h-11 flex items-center justify-center bg-brand-slate hover:bg-brand-blue/10 rounded-2xl text-brand-blue active:scale-95 transition-all border border-gray-100 shrink-0 shadow-sm"
+                    className="w-11 h-11 flex items-center justify-center bg-brand-slate dark:bg-slate-800 hover:bg-brand-blue/10 rounded-2xl text-brand-blue dark:text-blue-400 active:scale-95 transition-all border border-gray-100 dark:border-slate-700 shrink-0 shadow-sm cursor-pointer"
                   >
                     <ChevronLeft size={22} strokeWidth={3} />
                   </button>
                   <div>
-                    <h2 className="text-xl sm:text-2xl font-display font-black text-brand-dark tracking-tighter uppercase leading-none mb-1">Inventário por Marca</h2>
-                    <p className="text-[10px] text-brand-blue font-black uppercase tracking-widest flex items-center gap-1">
+                    <h2 className="text-xl sm:text-2xl font-display font-black text-brand-dark dark:text-white tracking-tighter uppercase leading-none mb-1">Inventário por Marca</h2>
+                    <p className="text-[10px] text-brand-blue dark:text-blue-400 font-black uppercase tracking-widest flex items-center gap-1">
                       <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
                       Atualização em Tempo Real
                     </p>
@@ -2696,7 +3179,7 @@ const App: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleStartNew}
-                  className="bg-brand-red text-white p-3 rounded-2xl font-black text-xs flex items-center gap-1.5 shadow-lg shadow-brand-red/20 active:scale-95 transition-all"
+                  className="bg-brand-red text-white p-3 rounded-2xl font-black text-xs flex items-center gap-1.5 shadow-lg shadow-brand-red/20 active:scale-95 transition-all cursor-pointer"
                 >
                   <Plus size={18} strokeWidth={3} />
                   <span className="hidden sm:inline uppercase">Contar</span>
@@ -2754,16 +3237,17 @@ const App: React.FC = () => {
               {/* Filters & Search */}
               <div className="space-y-3">
                 <div className="relative">
-                  <Search className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+                  <Search className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-400 dark:text-slate-500" size={18} />
                   <input 
                     type="text"
                     placeholder="Buscar marca no inventário..."
-                    className="w-full pl-14 pr-10 py-4 bg-white rounded-2xl shadow-sm border border-gray-100 focus:border-brand-accent focus:outline-none font-bold text-sm text-brand-dark placeholder:text-gray-300"
+                    className="w-full pl-14 pr-10 py-4 bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-gray-100 dark:border-slate-800 focus:border-brand-accent focus:outline-none font-bold text-sm text-brand-dark dark:text-white placeholder:text-gray-300 dark:placeholder:text-slate-600"
                     value={brandSearchTerm}
                     onChange={(e) => setBrandSearchTerm(e.target.value)}
                   />
                   {brandSearchTerm && (
                     <button 
+                      type="button"
                       onClick={() => setBrandSearchTerm('')}
                       className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-red-500"
                     >
@@ -2772,7 +3256,7 @@ const App: React.FC = () => {
                   )}
                 </div>
 
-                {/* Filter Tabs */}
+                {/* Status Filter Tabs */}
                 <div className="flex flex-wrap gap-2">
                   {[
                     { id: 'ALL', label: `Todas (${allBrandsList.length})` },
@@ -2784,273 +3268,91 @@ const App: React.FC = () => {
                       key={tab.id}
                       type="button"
                       onClick={() => setBrandStatusFilter(tab.id as any)}
-                      className={`px-4 py-2 rounded-xl text-xs font-black transition-all border ${
+                      className={`px-4 py-2 rounded-xl text-xs font-black transition-all border cursor-pointer ${
                         brandStatusFilter === tab.id
-                          ? 'bg-brand-dark text-white border-brand-dark shadow-sm'
-                          : 'bg-white text-gray-600 hover:bg-gray-50 border-gray-200'
+                          ? 'bg-brand-dark dark:bg-white text-white dark:text-slate-950 border-brand-dark dark:border-white shadow-sm'
+                          : 'bg-white dark:bg-slate-900 text-gray-600 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-800 border-gray-200 dark:border-slate-800'
                       }`}
                     >
                       {tab.label}
                     </button>
                   ))}
                 </div>
+
+                {/* Gender Filter Pills */}
+                <div className="flex flex-wrap items-center gap-1.5 bg-white dark:bg-slate-900 p-2.5 rounded-2xl border border-gray-100 dark:border-slate-800 shadow-xs">
+                  <span className="text-[10px] font-black uppercase text-gray-400 dark:text-slate-500 flex items-center gap-1 mr-1 px-1">
+                    <Filter size={11} />
+                    Gênero:
+                  </span>
+                  {[
+                    { id: 'ALL', label: 'Todos' },
+                    { id: 'M', label: 'Masculino' },
+                    { id: 'F', label: 'Feminino' },
+                    { id: 'IM', label: 'Inf. Masc' },
+                    { id: 'IF', label: 'Inf. Fem' },
+                  ].map(g => (
+                    <button
+                      key={g.id}
+                      type="button"
+                      onClick={() => setBrandGenderFilter(g.id as any)}
+                      className={`px-3 py-1.5 rounded-xl text-[10px] font-black uppercase transition-all border cursor-pointer ${
+                        brandGenderFilter === g.id
+                          ? 'bg-brand-blue text-white border-brand-blue shadow-xs'
+                          : 'bg-gray-50 dark:bg-slate-800 text-gray-600 dark:text-slate-300 border-gray-200 dark:border-slate-700 hover:bg-gray-100 dark:hover:bg-slate-700'
+                      }`}
+                    >
+                      {g.label}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               {/* Brand List Cards */}
-              <div className="space-y-3">
+              <div>
                 {(() => {
+                  const lowSearch = deferredBrandSearchTerm.toLowerCase().trim();
                   const filtered = brandStats.filter(brand => {
-                    const matchesSearch = brand.name.toLowerCase().includes(brandSearchTerm.toLowerCase());
-                    if (!matchesSearch) return false;
-                    if (brandStatusFilter === 'COMPLETED') return brand.status === 'COMPLETED';
-                    if (brandStatusFilter === 'IN_PROGRESS') return brand.status === 'IN_PROGRESS';
-                    if (brandStatusFilter === 'PENDING') return brand.status === 'PENDING';
+                    if (lowSearch && !brand.name.toLowerCase().includes(lowSearch)) return false;
+                    if (brandStatusFilter === 'COMPLETED' && brand.status !== 'COMPLETED') return false;
+                    if (brandStatusFilter === 'IN_PROGRESS' && brand.status !== 'IN_PROGRESS') return false;
+                    if (brandStatusFilter === 'PENDING' && brand.status !== 'PENDING') return false;
+                    if (brandGenderFilter !== 'ALL' && !brand.items.some(i => i.gender === brandGenderFilter)) return false;
                     return true;
                   });
 
                   if (filtered.length === 0) {
                     return (
-                      <div className="bg-white p-12 rounded-[2rem] text-center border border-dashed border-gray-200 space-y-3">
-                        <Package size={40} className="mx-auto text-gray-300" />
-                        <p className="text-sm font-bold text-gray-400 uppercase tracking-wider">Nenhuma marca encontrada</p>
+                      <div className="bg-white dark:bg-slate-900 p-12 rounded-[2rem] text-center border border-dashed border-gray-200 dark:border-slate-800 space-y-3">
+                        <Package size={40} className="mx-auto text-gray-300 dark:text-slate-600" />
+                        <p className="text-sm font-bold text-gray-400 dark:text-slate-500 uppercase tracking-wider">Nenhuma marca encontrada</p>
                       </div>
                     );
                   }
 
-                  return filtered.map(brand => {
-                    const isExpanded = expandedBrand === brand.name;
-                    return (
-                      <div 
-                        key={brand.name}
-                        className={`bg-white rounded-3xl p-5 border transition-all shadow-sm space-y-4 ${
-                          brand.status === 'COMPLETED' 
-                            ? 'border-emerald-200/80 bg-gradient-to-r from-emerald-50/30 to-white' 
-                            : brand.status === 'IN_PROGRESS'
-                              ? 'border-blue-200 bg-gradient-to-r from-blue-50/20 to-white'
-                              : 'border-gray-100'
-                        }`}
-                      >
-                        {/* Header: Brand Name, Status Badge & Trash Delete Brand */}
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-                              <h4 className="text-xl font-display font-black text-brand-dark uppercase tracking-tight truncate">
-                                {brand.name}
-                              </h4>
-                              
-                              {/* Status Badge */}
-                              {brand.status === 'COMPLETED' && (
-                                <span className="px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-800 border border-emerald-200 flex items-center gap-1 shrink-0">
-                                  <CheckCircle2 size={12} /> Concluída
-                                </span>
-                              )}
-                              {brand.status === 'IN_PROGRESS' && (
-                                <span className="px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider bg-blue-100 text-blue-800 border border-blue-200 flex items-center gap-1 shrink-0">
-                                  ⏳ Em Contagem ({brand.totalPieces} pcs)
-                                </span>
-                              )}
-                              {brand.status === 'PENDING' && (
-                                <span className="px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider bg-gray-100 text-gray-500 border border-gray-200 shrink-0">
-                                  ⚪ Pendente
-                                </span>
-                              )}
-                            </div>
-
-                            {/* Stats Pills (No vertical line wrapping) */}
-                            <div className="flex items-center gap-2 text-xs font-bold text-gray-600 flex-wrap pt-0.5">
-                              <span className="bg-gray-100/90 text-brand-dark px-3 py-1 rounded-xl whitespace-nowrap border border-gray-200/50">
-                                <strong className="text-brand-blue font-black">{brand.totalPieces}</strong> peças total
-                              </span>
-                              <span className="bg-gray-100/90 text-brand-dark px-3 py-1 rounded-xl whitespace-nowrap border border-gray-200/50">
-                                <strong className="text-brand-blue font-black">{brand.totalModels}</strong> modelos
-                              </span>
-                              <span className="bg-gray-100/90 text-brand-dark px-3 py-1 rounded-xl whitespace-nowrap border border-gray-200/50">
-                                <strong className="text-brand-blue font-black">{brand.totalLots}</strong> lotes
-                              </span>
-                            </div>
-                          </div>
-
-                          {/* Top Right Quick Delete Icon */}
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteBrand(brand.name, brand.totalLots, brand.totalPieces)}
-                            title={`Excluir a marca ${brand.name}`}
-                            className="p-2.5 text-gray-400 hover:text-rose-600 hover:bg-rose-50 rounded-2xl active:scale-90 transition-all border border-transparent hover:border-rose-100 shrink-0"
-                          >
-                            <Trash2 size={20} strokeWidth={2.2} />
-                          </button>
-                        </div>
-
-                        {/* Action Buttons Row */}
-                        <div className="flex items-center gap-2 flex-wrap pt-2 border-t border-gray-100">
-                          {/* Pré-Visualização / Contagem Geral */}
-                          {brand.items.length > 0 && (
-                            <button
-                              type="button"
-                              onClick={() => setViewingBrandPreview({ brandName: brand.name, items: brand.items })}
-                              title={`Pré-visualizar contagem geral da marca ${brand.name}`}
-                              className="p-2.5 px-3.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-2xl font-black text-xs flex items-center gap-1.5 border border-indigo-200 shadow-xs active:scale-95 transition-all"
-                            >
-                              <Eye size={16} strokeWidth={2.5} />
-                              <span className="text-[10px] uppercase tracking-wider">
-                                Pré-Visualizar
-                              </span>
-                            </button>
-                          )}
-
-                          {/* Editar / Atualizar Contagens */}
-                          <button
-                            type="button"
-                            onClick={() => setBrandEditModal({ isOpen: true, brandName: brand.name })}
-                            title={`Editar ou atualizar números da marca ${brand.name}`}
-                            className="p-2.5 px-3.5 bg-amber-50 hover:bg-amber-100 text-amber-800 rounded-2xl font-black text-xs flex items-center gap-1.5 border border-amber-200 shadow-xs active:scale-95 transition-all"
-                          >
-                            <Edit2 size={16} strokeWidth={2.5} />
-                            <span className="text-[10px] uppercase tracking-wider">
-                              Editar / Atualizar
-                            </span>
-                          </button>
-
-                          {/* Ver Lotes */}
-                          {brand.items.length > 0 && (
-                            <button
-                              type="button"
-                              onClick={() => setExpandedBrand(isExpanded ? null : brand.name)}
-                              title={`Ver lotes de ${brand.name}`}
-                              className="p-2.5 px-3.5 bg-blue-50 hover:bg-blue-100 text-brand-blue rounded-2xl font-black text-xs flex items-center gap-1.5 border border-blue-200 shadow-xs active:scale-95 transition-all"
-                            >
-                              <Eye size={16} strokeWidth={2.5} />
-                              <span className="text-[10px] uppercase tracking-wider">
-                                {isExpanded ? 'Ocultar Lotes' : 'Ver Lotes'}
-                              </span>
-                            </button>
-                          )}
-
-                          {/* Baixar PDF da Marca */}
-                          {brand.items.length > 0 && (
-                            <button
-                              type="button"
-                              onClick={() => generateBrandPDF(brand.name, brand.items)}
-                              title={`Baixar PDF da marca ${brand.name}`}
-                              className="p-2.5 px-3.5 bg-red-50 hover:bg-red-100 text-brand-red rounded-2xl font-black text-xs flex items-center gap-1.5 border border-red-200 shadow-xs active:scale-95 transition-all"
-                            >
-                              <Download size={16} strokeWidth={2.5} />
-                              <span className="text-[10px] uppercase tracking-wider">
-                                PDF
-                              </span>
-                            </button>
-                          )}
-
-                          {/* Toggle Concluded */}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              toggleBrandCompleted(brand.name);
-                              showToast(
-                                completedBrands[brand.name] 
-                                  ? `Marca ${brand.name} reaberta` 
-                                  : `Marca ${brand.name} concluída!`,
-                                'success'
-                              );
-                            }}
-                            title={completedBrands[brand.name] ? 'Reabrir contagem' : 'Marcar como Concluída'}
-                            className={`p-2.5 px-3.5 rounded-2xl border font-black text-xs flex items-center gap-1.5 transition-all ${
-                              completedBrands[brand.name]
-                                ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
-                                : 'bg-gray-50 hover:bg-emerald-50 text-gray-600 hover:text-emerald-700 border-gray-200'
-                            }`}
-                          >
-                            <CheckCircle2 size={16} strokeWidth={2.5} />
-                            <span className="text-[10px] uppercase tracking-wider">
-                              {completedBrands[brand.name] ? 'Concluída' : 'Concluir'}
-                            </span>
-                          </button>
-
-                          {/* Start/Continue Count */}
-                          <button
-                            type="button"
-                            onClick={() => handleStartWithSameBrand(brand.name)}
-                            className="p-2.5 px-3.5 bg-brand-blue hover:bg-brand-dark text-white rounded-2xl font-black text-xs flex items-center gap-1.5 shadow-md active:scale-95 transition-all ml-auto"
-                            title={`Contar ${brand.name}`}
-                          >
-                            <Plus size={16} strokeWidth={3} />
-                            <span className="text-[10px] uppercase tracking-wider">Contar</span>
-                          </button>
-                        </div>
-
-                        {/* Accordion toggle if items exist */}
-                        {brand.items.length > 0 && (
-                          <div className="pt-2 border-t border-gray-100 flex items-center justify-between text-[10px] font-bold text-gray-400">
-                            <span>
-                              Último lançamento: {new Date(brand.items[0]?.createdAt || 0).toLocaleDateString('pt-BR')}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteBrand(brand.name, brand.totalLots, brand.totalPieces)}
-                              className="text-rose-500 hover:underline flex items-center gap-1 font-black uppercase text-[10px]"
-                            >
-                              <Trash2 size={12} />
-                              Excluir Marca
-                            </button>
-                          </div>
-                        )}
-
-                        {/* Expanded Items List */}
-                        {isExpanded && brand.items.length > 0 && (
-                          <motion.div 
-                            initial={{ opacity: 0, height: 0 }}
-                            animate={{ opacity: 1, height: 'auto' }}
-                            className="mt-3 space-y-2 pt-2 border-t border-dashed border-gray-200"
-                          >
-                            {brand.items.map(item => (
-                              <div key={item.id} className="p-3 bg-brand-slate/60 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between text-xs font-bold text-brand-dark gap-2 border border-gray-100">
-                                <div className="min-w-0 flex-1">
-                                  <span className="block font-black text-sm uppercase truncate">{item.model}</span>
-                                  <span className="text-[10px] text-gray-500 font-normal block truncate">
-                                    Cor: {item.color || '-'} | Gênero: {item.gender || '-'} | Chegada: {item.arrivalMonth || '--'}/{item.arrivalYear || '--'}
-                                  </span>
-                                </div>
-                                <div className="flex items-center gap-1.5 shrink-0 justify-end flex-wrap">
-                                  <span className="px-3 py-1 bg-white rounded-xl text-brand-blue font-black text-sm shadow-xs border border-gray-100">
-                                    {item.total} pcs
-                                  </span>
-                                  <button 
-                                    onClick={() => handleEdit(item)} 
-                                    className="px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-700 font-black text-[10px] uppercase rounded-xl flex items-center gap-1 border border-amber-200 active:scale-95 transition-all"
-                                    title="Editar este lote"
-                                  >
-                                    <Edit2 size={14} strokeWidth={2.5} />
-                                    <span>Editar</span>
-                                  </button>
-                                  <button 
-                                    onClick={() => setViewingPdfItem(item)} 
-                                    className="p-1.5 text-brand-blue hover:bg-white rounded-xl active:scale-90 transition-all border border-transparent hover:border-gray-200 shadow-xs"
-                                    title="Pré-visualizar Comprovante / PDF"
-                                  >
-                                    <Eye size={16} strokeWidth={2.5} />
-                                  </button>
-                                  <button 
-                                    onClick={() => generateSinglePDF(item)} 
-                                    className="p-1.5 text-brand-red hover:bg-white rounded-xl active:scale-90 transition-all border border-transparent hover:border-gray-200 shadow-xs"
-                                    title="Baixar PDF do Lote"
-                                  >
-                                    <Download size={16} strokeWidth={2.5} />
-                                  </button>
-                                  <button 
-                                    onClick={() => handleDelete(item.id)} 
-                                    className="p-1.5 text-rose-500 hover:bg-rose-50 rounded-xl active:scale-90 transition-all border border-transparent hover:border-rose-200"
-                                    title="Excluir Lote"
-                                  >
-                                    <Trash2 size={16} strokeWidth={2.5} />
-                                  </button>
-                                </div>
-                              </div>
-                            ))}
-                          </motion.div>
-                        )}
-                      </div>
-                    );
-                  });
+                  return (
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-5">
+                      {filtered.map(brand => (
+                        <BrandStatCard
+                          key={brand.name}
+                          brand={brand as BrandStat}
+                          isExpanded={expandedBrand === brand.name}
+                          isCompleted={!!completedBrands[brand.name]}
+                          onToggleExpand={handleToggleExpandBrand}
+                          onStartWithSameBrand={handleStartWithSameBrand}
+                          onToggleBrandCompletion={handleToggleBrandCompletion}
+                          onDeleteBrand={handleDeleteBrand}
+                          onViewBrandPreview={handleViewBrandPreview}
+                          onEditBrand={handleEditBrand}
+                          onGenerateBrandPdf={handleGenerateBrandPdf}
+                          onGenerateBrandExcel={handleGenerateBrandExcel}
+                          onViewPdfItem={handleViewPdf}
+                          onEditItem={handleEdit}
+                          onDeleteItem={handleDelete}
+                        />
+                      ))}
+                    </div>
+                  );
                 })()}
               </div>
             </motion.div>
@@ -3064,65 +3366,56 @@ const App: React.FC = () => {
               exit={{ opacity: 0, scale: 0.98 }}
               className="space-y-6 pb-10"
             >
-              <div className="bg-white p-6 rounded-[2rem] shadow-modern border border-gray-50">
+              <div className="bg-white dark:bg-slate-900 p-6 rounded-[2rem] shadow-modern border border-gray-50 dark:border-slate-800">
                 <div className="flex items-center gap-4">
                   <button 
                     type="button"
                     onClick={() => setCurrentView(AppView.HOME)} 
-                    className="w-11 h-11 flex items-center justify-center bg-brand-slate hover:bg-brand-blue/10 rounded-2xl text-brand-blue active:scale-95 transition-all border border-gray-100 shrink-0 shadow-sm"
+                    className="w-11 h-11 flex items-center justify-center bg-brand-slate dark:bg-slate-800 hover:bg-brand-blue/10 rounded-2xl text-brand-blue dark:text-blue-400 active:scale-95 transition-all border border-gray-100 dark:border-slate-700 shrink-0 shadow-sm cursor-pointer"
                   >
                     <ChevronLeft size={22} strokeWidth={3} />
                   </button>
                   <div className="min-w-0 flex-1">
-                    <h2 className="text-xl sm:text-2xl font-display font-black text-brand-dark tracking-tighter uppercase leading-none mb-1">Visão Geral</h2>
-                    <p className="text-[10px] text-brand-red uppercase font-black tracking-widest opacity-90">Estatísticas & Inteligencia IA</p>
+                    <h2 className="text-xl sm:text-2xl font-display font-black text-brand-dark dark:text-white tracking-tighter uppercase leading-none mb-1">Visão Geral</h2>
+                    <p className="text-[10px] text-brand-red uppercase font-black tracking-widest opacity-90">Estatísticas & Giro por Marca</p>
                   </div>
                 </div>
               </div>
 
               {/* Quick Metrics Bento Grid */}
               <div className="grid grid-cols-2 gap-4">
-                <div className="bg-white p-5 rounded-[2rem] border border-gray-100 shadow-sm flex flex-col justify-between h-32">
-                  <span className="text-[8px] font-black text-gray-400 uppercase tracking-widest">Total de Itens</span>
+                <div className="bg-white dark:bg-slate-900 p-5 rounded-[2rem] border border-gray-100 dark:border-slate-800 shadow-sm flex flex-col justify-between h-32">
+                  <span className="text-[8px] font-black text-gray-400 dark:text-slate-400 uppercase tracking-widest">Total de Itens</span>
                   <div className="flex items-end justify-between">
-                    <span className="text-3xl font-display font-black text-brand-dark">{counts.reduce((sum, c) => sum + c.total, 0)}</span>
-                    <Package size={20} className="text-brand-blue opacity-20 mb-1" />
+                    <span className="text-3xl font-display font-black text-brand-dark dark:text-white">{counts.reduce((sum, c) => sum + c.total, 0)}</span>
+                    <Package size={20} className="text-brand-blue dark:text-blue-400 opacity-25 mb-1" />
                   </div>
                 </div>
-                <div className="bg-white p-5 rounded-[2rem] border border-gray-100 shadow-sm flex flex-col justify-between h-32">
-                  <span className="text-[8px] font-black text-gray-400 uppercase tracking-widest">Diferentes Modelos</span>
+                <div className="bg-white dark:bg-slate-900 p-5 rounded-[2rem] border border-gray-100 dark:border-slate-800 shadow-sm flex flex-col justify-between h-32">
+                  <span className="text-[8px] font-black text-gray-400 dark:text-slate-400 uppercase tracking-widest">Diferentes Modelos</span>
                   <div className="flex items-end justify-between">
-                    <span className="text-3xl font-display font-black text-brand-dark">{new Set(counts.map(c => c.model)).size}</span>
-                    <LayoutGrid size={20} className="text-brand-red opacity-20 mb-1" />
+                    <span className="text-3xl font-display font-black text-brand-dark dark:text-white">{new Set(counts.map(c => c.model)).size}</span>
+                    <LayoutGrid size={20} className="text-brand-red opacity-25 mb-1" />
                   </div>
                 </div>
               </div>
 
               {/* Pie Chart: Distribution by Category */}
-              <div className="bg-white p-6 rounded-[2.5rem] shadow-modern border border-gray-100 space-y-4">
+              <div className="bg-white dark:bg-slate-900 p-6 rounded-[2.5rem] shadow-modern border border-gray-100 dark:border-slate-800 space-y-4">
                 <div className="flex items-center justify-between">
                   <div>
-                    <h3 className="font-display font-black text-brand-dark uppercase text-xs tracking-widest">Distribuição por Categoria</h3>
-                    <p className="text-[8px] text-gray-400 font-bold uppercase tracking-widest">Volume total de peças</p>
+                    <h3 className="font-display font-black text-brand-dark dark:text-white uppercase text-xs tracking-widest">Distribuição por Categoria</h3>
+                    <p className="text-[8px] text-gray-400 dark:text-slate-400 font-bold uppercase tracking-widest">Volume total de peças</p>
                   </div>
-                  <TrendingUp size={20} className="text-brand-blue opacity-20" />
+                  <TrendingUp size={20} className="text-brand-blue dark:text-blue-400 opacity-30" />
                 </div>
                 
                 <div className="h-56 w-full">
-                  {counts.length > 0 ? (
+                  {analyticsCategoryData.length > 0 ? (
                     <ResponsiveContainer width="100%" height="100%">
                       <PieChart>
                         <Pie
-                          data={(() => {
-                            const summary: Record<string, number> = {};
-                            counts.forEach(c => {
-                              summary[c.productType] = (summary[c.productType] || 0) + c.total;
-                            });
-                            return Object.entries(summary)
-                              .map(([name, value]) => ({ name, value }))
-                              .sort((a, b) => b.value - a.value)
-                              .slice(0, 5);
-                          })()}
+                          data={analyticsCategoryData}
                           cx="50%"
                           cy="50%"
                           innerRadius={60}
@@ -3130,8 +3423,8 @@ const App: React.FC = () => {
                           paddingAngle={5}
                           dataKey="value"
                         >
-                          {counts.map((_, index) => (
-                            <Cell key={`cell-${index}`} fill={['#1D2B5B', '#C02428', '#34A853', '#FBBC05', '#EA4335'][index % 5]} />
+                          {analyticsCategoryData.map((_, index) => (
+                            <Cell key={`cell-${index}`} fill={['#1D2B5B', '#C02428', '#34A853', '#FBBC05', '#6366F1'][index % 5]} />
                           ))}
                         </Pie>
                         <Tooltip 
@@ -3142,22 +3435,15 @@ const App: React.FC = () => {
                   ) : null}
                 </div>
                 <div className="flex flex-wrap gap-3 justify-center">
-                  {(() => {
-                    const summary: Record<string, number> = {};
-                    counts.forEach(c => {
-                      summary[c.productType] = (summary[c.productType] || 0) + c.total;
-                    });
-                    const colors = ['#1D2B5B', '#C02428', '#34A853', '#FBBC05', '#EA4335'];
-                    return Object.entries(summary)
-                      .sort((a, b) => b[1] - a[1])
-                      .slice(0, 5)
-                      .map(([name, _], i) => (
-                        <div key={name} className="flex items-center gap-1.5">
-                          <div className="w-2 h-2 rounded-full" style={{ backgroundColor: colors[i % colors.length] }}></div>
-                          <span className="text-[8px] font-black text-gray-500 uppercase tracking-tighter">{name}</span>
-                        </div>
-                      ));
-                  })()}
+                  {analyticsCategoryData.map((entry, i) => {
+                    const colors = ['#1D2B5B', '#C02428', '#34A853', '#FBBC05', '#6366F1'];
+                    return (
+                      <div key={entry.name} className="flex items-center gap-1.5">
+                        <div className="w-2 h-2 rounded-full" style={{ backgroundColor: colors[i % colors.length] }}></div>
+                        <span className="text-[9px] font-black text-gray-500 dark:text-slate-400 uppercase tracking-tighter">{entry.name}</span>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -3174,19 +3460,9 @@ const App: React.FC = () => {
                 </div>
 
                 <div className="h-48 w-full relative z-10 -ml-4">
-                  {counts.length > 0 ? (
+                  {analyticsModelData.length > 0 ? (
                     <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={(() => {
-                        const summary: Record<string, number> = {};
-                        counts.forEach(c => {
-                          const key = `${c.model} (${c.productType.substring(0,3)})`;
-                          summary[key] = (summary[key] || 0) + c.total;
-                        });
-                        return Object.entries(summary)
-                          .map(([name, value]) => ({ name, value }))
-                          .sort((a, b) => b.value - a.value)
-                          .slice(0, 5);
-                      })()}>
+                      <BarChart data={analyticsModelData}>
                         <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(255,255,255,0.05)" />
                         <XAxis 
                           dataKey="name" 
@@ -3205,8 +3481,8 @@ const App: React.FC = () => {
                           itemStyle={{ color: '#fff', fontWeight: 'bold' }}
                         />
                         <Bar dataKey="value" radius={[6, 6, 0, 0]} barSize={35}>
-                          {counts.map((_, index) => (
-                            <Cell key={`cell-${index}`} fill={['#C02428', '#ffffff40', '#ffffff20', '#ffffff10', '#ffffff05'][index % 5]} />
+                          {analyticsModelData.map((_, index) => (
+                            <Cell key={`cell-${index}`} fill={['#C02428', '#3B82F6', '#10B981', '#F59E0B', '#6366F1'][index % 5]} />
                           ))}
                         </Bar>
                       </BarChart>
@@ -3221,13 +3497,13 @@ const App: React.FC = () => {
 
               {/* Brand Size Turnover Analysis Card */}
               {brandAnalysis.length > 0 && (
-                <div className="bg-white p-6 sm:p-8 rounded-[2.5rem] shadow-modern border border-gray-100 space-y-6">
+                <div className="bg-white dark:bg-slate-900 p-6 sm:p-8 rounded-[2.5rem] shadow-modern border border-gray-100 dark:border-slate-800 space-y-6">
                   <div className="flex items-center justify-between">
                     <div>
-                      <h3 className="font-display font-black text-brand-dark uppercase text-sm tracking-tight mb-0.5">
+                      <h3 className="font-display font-black text-brand-dark dark:text-white uppercase text-sm tracking-tight mb-0.5">
                         Giro de Numerações por Marca
                       </h3>
-                      <p className="text-[8px] text-gray-400 font-black uppercase tracking-widest">
+                      <p className="text-[8px] text-gray-400 dark:text-slate-400 font-black uppercase tracking-widest">
                         Análise de saída de tamanhos (Alta, Média e Baixa)
                       </p>
                     </div>
@@ -3238,9 +3514,9 @@ const App: React.FC = () => {
 
                   <div className="space-y-4">
                     {brandAnalysis.map(b => (
-                      <div key={b.brandName} className="p-4 bg-brand-slate/40 rounded-3xl border border-gray-100 space-y-3">
-                        <div className="flex items-center justify-between pb-2 border-b border-gray-200/60">
-                          <span className="font-display font-black text-brand-dark uppercase text-xs">{b.brandName}</span>
+                      <div key={b.brandName} className="p-4 bg-brand-slate/40 dark:bg-slate-800/50 rounded-3xl border border-gray-100 dark:border-slate-700/80 space-y-3">
+                        <div className="flex items-center justify-between pb-2 border-b border-gray-200/60 dark:border-slate-700">
+                          <span className="font-display font-black text-brand-dark dark:text-white uppercase text-xs">{b.brandName}</span>
                           <span className="text-[9px] font-black bg-brand-blue text-white px-2.5 py-0.5 rounded-full uppercase tracking-wider">
                             {b.totalItems} pares
                           </span>
@@ -3248,15 +3524,15 @@ const App: React.FC = () => {
 
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
                           {/* Saindo Bastante */}
-                          <div className="p-2.5 bg-emerald-50/90 border border-emerald-200/60 rounded-2xl space-y-1">
-                            <div className="text-[9px] font-black text-emerald-800 uppercase tracking-wider flex items-center gap-1">
+                          <div className="p-2.5 bg-emerald-50/90 dark:bg-emerald-950/40 border border-emerald-200/60 dark:border-emerald-800/60 rounded-2xl space-y-1">
+                            <div className="text-[9px] font-black text-emerald-800 dark:text-emerald-300 uppercase tracking-wider flex items-center gap-1">
                               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
                               Saindo Bastante
                             </div>
                             {b.highOutputSizes.length > 0 ? (
                               <div className="flex flex-wrap gap-1">
                                 {b.highOutputSizes.map(s => (
-                                  <span key={s.size} className="bg-emerald-100 text-emerald-900 px-2 py-0.5 rounded-lg text-[9px] font-black">
+                                  <span key={s.size} className="bg-emerald-100 dark:bg-emerald-900/60 text-emerald-900 dark:text-emerald-200 px-2 py-0.5 rounded-lg text-[9px] font-black">
                                     {s.size}: {s.qty}un
                                   </span>
                                 ))}
@@ -3267,15 +3543,15 @@ const App: React.FC = () => {
                           </div>
 
                           {/* Saindo Mais ou Menos */}
-                          <div className="p-2.5 bg-amber-50/90 border border-amber-200/60 rounded-2xl space-y-1">
-                            <div className="text-[9px] font-black text-amber-800 uppercase tracking-wider flex items-center gap-1">
+                          <div className="p-2.5 bg-amber-50/90 dark:bg-amber-950/40 border border-amber-200/60 dark:border-amber-800/60 rounded-2xl space-y-1">
+                            <div className="text-[9px] font-black text-amber-800 dark:text-amber-300 uppercase tracking-wider flex items-center gap-1">
                               <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
                               Saindo Mais ou Menos
                             </div>
                             {b.mediumOutputSizes.length > 0 ? (
                               <div className="flex flex-wrap gap-1">
                                 {b.mediumOutputSizes.map(s => (
-                                  <span key={s.size} className="bg-amber-100 text-amber-900 px-2 py-0.5 rounded-lg text-[9px] font-black">
+                                  <span key={s.size} className="bg-amber-100 dark:bg-amber-900/60 text-amber-900 dark:text-amber-200 px-2 py-0.5 rounded-lg text-[9px] font-black">
                                     {s.size}: {s.qty}un
                                   </span>
                                 ))}
@@ -3286,15 +3562,15 @@ const App: React.FC = () => {
                           </div>
 
                           {/* Saindo Pouco */}
-                          <div className="p-2.5 bg-rose-50/90 border border-rose-200/60 rounded-2xl space-y-1">
-                            <div className="text-[9px] font-black text-rose-800 uppercase tracking-wider flex items-center gap-1">
+                          <div className="p-2.5 bg-rose-50/90 dark:bg-rose-950/40 border border-rose-200/60 dark:border-rose-800/60 rounded-2xl space-y-1">
+                            <div className="text-[9px] font-black text-rose-800 dark:text-rose-300 uppercase tracking-wider flex items-center gap-1">
                               <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
                               Saindo Pouco
                             </div>
                             {b.lowOutputSizes.length > 0 ? (
                               <div className="flex flex-wrap gap-1">
                                 {b.lowOutputSizes.map(s => (
-                                  <span key={s.size} className="bg-rose-100 text-rose-900 px-2 py-0.5 rounded-lg text-[9px] font-black">
+                                  <span key={s.size} className="bg-rose-100 dark:bg-rose-900/60 text-rose-900 dark:text-rose-200 px-2 py-0.5 rounded-lg text-[9px] font-black">
                                     {s.size}: {s.qty}un
                                   </span>
                                 ))}
@@ -3356,6 +3632,43 @@ const App: React.FC = () => {
                   counts={counts}
                   onBackToHome={() => setCurrentView(AppView.HOME)}
                   showToast={showToast}
+                  onOpenBrands={() => setCurrentView(AppView.INVENTORIES)}
+                  onOpenPurchasing={(priority) => {
+                    setPurchasingInitialPriority(priority);
+                    setCurrentView(AppView.PURCHASING);
+                  }}
+                  onOpenSizeFilter={(sz) => {
+                    setHistorySizeMode('AVAILABLE');
+                    setHistorySizeFilter(sz);
+                    setHistoryViewType('ITEMS');
+                    setCurrentView(AppView.HOME);
+                  }}
+                  onSelectBrand={(brandName) => {
+                    const items = counts.filter(
+                      c => (c.brand || '').trim().toLowerCase() === brandName.trim().toLowerCase()
+                    );
+                    setViewingBrandPreview({ brandName, items });
+                  }}
+                />
+              </React.Suspense>
+            </motion.div>
+          )}
+
+          {currentView === AppView.PURCHASING && (
+            <motion.div
+              key="purchasing"
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -15 }}
+              className="space-y-6"
+            >
+              <React.Suspense fallback={<div className="p-8 text-center text-slate-400 font-bold">Carregando Central de Compras...</div>}>
+                <PurchaseCenterModule
+                  counts={counts}
+                  initialPriorityFilter={purchasingInitialPriority}
+                  onBackToHome={() => setCurrentView(AppView.HOME)}
+                  onEditItem={handleEdit}
+                  showToast={showToast}
                 />
               </React.Suspense>
             </motion.div>
@@ -3415,49 +3728,49 @@ const App: React.FC = () => {
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.9, opacity: 0 }}
-              className="bg-white max-w-md w-full rounded-[2.5rem] p-6 sm:p-8 shadow-2xl border border-red-100 space-y-6 relative overflow-hidden"
+              className="bg-white dark:bg-slate-900 max-w-md w-full rounded-[2.5rem] p-6 sm:p-8 shadow-2xl border border-red-100 dark:border-slate-800 space-y-6 relative overflow-hidden"
             >
-              <div className="flex items-center gap-4 text-amber-700 bg-amber-50 p-4 rounded-2xl border border-amber-200">
+              <div className="flex items-center gap-4 text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 p-4 rounded-2xl border border-amber-200 dark:border-amber-800/60">
                 <div className="p-3 bg-amber-500 text-white rounded-xl shadow-md shrink-0">
                   <AlertTriangle size={24} />
                 </div>
                 <div>
-                  <h4 className="font-black uppercase text-sm text-amber-900 leading-tight">
+                  <h4 className="font-black uppercase text-sm text-amber-900 dark:text-amber-200 leading-tight">
                     Marca / Referência Diferente!
                   </h4>
-                  <p className="text-xs font-medium text-amber-800 mt-0.5">
+                  <p className="text-xs font-medium text-amber-800 dark:text-amber-300 mt-0.5">
                     Sua contagem está travada na referência atual.
                   </p>
                 </div>
               </div>
 
-              <div className="space-y-3 text-xs font-medium text-gray-700 bg-slate-50 p-4 rounded-2xl border border-gray-100">
+              <div className="space-y-3 text-xs font-medium text-gray-700 dark:text-slate-300 bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl border border-gray-100 dark:border-slate-700">
                 <div>
-                  <span className="block text-[10px] font-black uppercase tracking-wider text-gray-400 mb-1">
+                  <span className="block text-[10px] font-black uppercase tracking-wider text-gray-400 dark:text-slate-400 mb-1">
                     🔒 Em Contagem Ativa (Travada):
                   </span>
-                  <p className="font-bold text-sm text-brand-dark uppercase">
+                  <p className="font-bold text-sm text-brand-dark dark:text-white uppercase">
                     {activeLockedReference?.brand || 'Sem Marca'} {activeLockedReference?.model ? `- ${activeLockedReference.model}` : ''}
                   </p>
                   {activeLockedReference?.barcode && (
-                    <p className="font-mono text-[11px] text-gray-500 mt-0.5">Cód: {activeLockedReference.barcode}</p>
+                    <p className="font-mono text-[11px] text-gray-500 dark:text-slate-400 mt-0.5">Cód: {activeLockedReference.barcode}</p>
                   )}
                 </div>
 
-                <hr className="border-gray-200 my-2" />
+                <hr className="border-gray-200 dark:border-slate-700 my-2" />
 
                 <div>
                   <span className="block text-[10px] font-black uppercase tracking-wider text-red-500 mb-1">
                     ⚡ Novo Código Bipado:
                   </span>
-                  <p className="font-bold text-sm text-red-600 uppercase">
+                  <p className="font-bold text-sm text-red-600 dark:text-red-400 uppercase">
                     {mismatchModalData.newScannedData.brand || 'Nova Marca / Não Cadastrada'} {mismatchModalData.newScannedData.model ? `- ${mismatchModalData.newScannedData.model}` : ''}
                   </p>
-                  <p className="font-mono text-[11px] text-gray-500 mt-0.5">Cód: {mismatchModalData.newScannedData.barcode}</p>
+                  <p className="font-mono text-[11px] text-gray-500 dark:text-slate-400 mt-0.5">Cód: {mismatchModalData.newScannedData.barcode}</p>
                 </div>
               </div>
 
-              <p className="text-xs text-gray-500 text-center font-medium leading-relaxed">
+              <p className="text-xs text-gray-500 dark:text-slate-400 text-center font-medium leading-relaxed">
                 Para evitar misturar marcas ou referências durante a contagem, escolha o que deseja fazer:
               </p>
 
@@ -3465,7 +3778,7 @@ const App: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setMismatchModalData(null)}
-                  className="w-full py-4 bg-slate-100 hover:bg-slate-200 text-slate-800 font-black text-xs uppercase tracking-wider rounded-2xl transition-all shadow-sm"
+                  className="w-full py-4 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-black text-xs uppercase tracking-wider rounded-2xl transition-all shadow-sm cursor-pointer"
                 >
                   Permanecer na Marca Atual ({activeLockedReference?.brand || 'Atual'})
                 </button>
@@ -3473,7 +3786,7 @@ const App: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => handleConfirmSwitchReference(mismatchModalData.newScannedData)}
-                  className="w-full py-4 bg-brand-red hover:bg-red-700 text-white font-black text-xs uppercase tracking-wider rounded-2xl shadow-lg shadow-red-600/30 transition-all flex items-center justify-center gap-2"
+                  className="w-full py-4 bg-brand-red hover:bg-red-700 text-white font-black text-xs uppercase tracking-wider rounded-2xl shadow-lg shadow-red-600/30 transition-all flex items-center justify-center gap-2 cursor-pointer"
                 >
                   <CheckCircle2 size={18} />
                   Concluir Atual e Contar Nova Marca ({mismatchModalData.newScannedData.brand || 'Nova'})
@@ -3484,46 +3797,62 @@ const App: React.FC = () => {
         )}
       </main>
 
-      <footer className="no-print pb-40 px-6 text-center">
-        <p className="text-[9px] font-black text-gray-400 uppercase tracking-[0.3em] leading-relaxed">
+      <footer className="no-print pb-32 md:pb-12 px-6 text-center">
+        <p className="text-[9px] font-black text-gray-400 dark:text-slate-500 uppercase tracking-[0.3em] leading-relaxed">
           Ideal Tecidos - Controle de Estoque<br/>
-          <span className="text-brand-blue/40">Desenvolvido pelo Engenheiro de Software Sergio Bruce</span>
+          <span className="text-brand-blue/40 dark:text-blue-400/50">Desenvolvido pelo Engenheiro de Software Sergio Bruce</span>
         </p>
       </footer>
 
-       {/* FIXED FOOTER NAVIGATION (No Print) */}
-      <nav className="no-print fixed bottom-0 left-0 right-0 max-w-lg sm:max-w-xl md:max-w-2xl mx-auto p-3 sm:p-4 z-50" style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom, 0px))' }}>
-        <div className="bg-brand-blue/95 backdrop-blur-xl rounded-[2.5rem] p-2 flex gap-1 shadow-2xl shadow-brand-blue/40 border border-white/10">
+       {/* FIXED FOOTER NAVIGATION (Mobile Only - Desktop uses Top Header Nav) */}
+      <nav className="no-print md:hidden fixed bottom-0 left-0 right-0 max-w-lg mx-auto p-2.5 z-50" style={{ paddingBottom: 'calc(0.65rem + env(safe-area-inset-bottom, 0px))' }}>
+        <div className="bg-brand-blue/95 dark:bg-slate-900/95 backdrop-blur-xl rounded-[2.5rem] p-1.5 flex gap-1 shadow-2xl shadow-brand-blue/40 border border-white/10">
           <button 
+            type="button"
             onClick={() => setCurrentView(AppView.HOME)}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-3.5 sm:py-4 rounded-[1.8rem] transition-all duration-500 ${currentView === AppView.HOME ? 'bg-white text-brand-blue shadow-xl' : 'text-white/40 hover:text-white'}`}
+            className={`flex-1 flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-1 py-2.5 sm:py-3.5 rounded-[1.8rem] transition-all duration-300 cursor-pointer ${currentView === AppView.HOME ? 'bg-white text-brand-blue shadow-xl' : 'text-white/60 hover:text-white'}`}
           >
-            <Home size={18} fill={currentView === AppView.HOME ? "currentColor" : "none"} />
-            <span className="text-[9px] sm:text-[10px] font-black uppercase tracking-wider leading-none">Início</span>
+            <Home size={16} fill={currentView === AppView.HOME ? "currentColor" : "none"} />
+            <span className="text-[8.5px] sm:text-[10px] font-black uppercase tracking-wider leading-none">Início</span>
           </button>
 
           <button 
+            type="button"
             onClick={() => setCurrentView(AppView.INVENTORIES)}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-3.5 sm:py-4 rounded-[1.8rem] transition-all duration-500 ${currentView === AppView.INVENTORIES ? 'bg-white text-brand-blue shadow-xl' : 'text-white/40 hover:text-white'}`}
+            className={`flex-1 flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-1 py-2.5 sm:py-3.5 rounded-[1.8rem] transition-all duration-300 cursor-pointer ${currentView === AppView.INVENTORIES ? 'bg-white text-brand-blue shadow-xl' : 'text-white/60 hover:text-white'}`}
           >
-            <ClipboardList size={18} />
-            <span className="text-[9px] sm:text-[10px] font-black uppercase tracking-wider leading-none">Marcas</span>
+            <ClipboardList size={16} />
+            <span className="text-[8.5px] sm:text-[10px] font-black uppercase tracking-wider leading-none">Marcas</span>
+          </button>
+
+          <button 
+            type="button"
+            onClick={() => {
+              setPurchasingInitialPriority('ALL');
+              setCurrentView(AppView.PURCHASING);
+            }}
+            className={`flex-1 flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-1 py-2.5 sm:py-3.5 rounded-[1.8rem] transition-all duration-300 cursor-pointer ${currentView === AppView.PURCHASING ? 'bg-amber-400 text-slate-950 shadow-xl' : 'text-amber-300/80 hover:text-amber-200'}`}
+          >
+            <ShoppingCart size={16} />
+            <span className="text-[8.5px] sm:text-[10px] font-black uppercase tracking-wider leading-none">Compras</span>
           </button>
           
           <button 
+            type="button"
             onClick={() => setCurrentView(AppView.ANALYTICS)}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-3.5 sm:py-4 rounded-[1.8rem] transition-all duration-500 ${currentView === AppView.ANALYTICS ? 'bg-white text-brand-blue shadow-xl' : 'text-white/40 hover:text-white'}`}
+            className={`flex-1 flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-1 py-2.5 sm:py-3.5 rounded-[1.8rem] transition-all duration-300 cursor-pointer ${currentView === AppView.ANALYTICS ? 'bg-white text-brand-blue shadow-xl' : 'text-white/60 hover:text-white'}`}
           >
-            <BrainCircuit size={18} />
-            <span className="text-[9px] sm:text-[10px] font-black uppercase tracking-wider leading-none">Análise</span>
+            <BrainCircuit size={16} />
+            <span className="text-[8.5px] sm:text-[10px] font-black uppercase tracking-wider leading-none">Análise</span>
           </button>
 
           <button 
+            type="button"
             onClick={generatePDF}
-            className="flex-1 flex items-center justify-center gap-1.5 py-3.5 sm:py-4 rounded-[1.8rem] text-white/40 hover:text-white hover:bg-white/5 transition-all duration-300"
+            className="flex-1 flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-1 py-2.5 sm:py-3.5 rounded-[1.8rem] text-white/60 hover:text-white hover:bg-white/5 transition-all duration-300 cursor-pointer"
           >
-            <Download size={18} />
-            <span className="text-[9px] sm:text-[10px] font-black uppercase tracking-wider leading-none">PDF</span>
+            <Download size={16} />
+            <span className="text-[8.5px] sm:text-[10px] font-black uppercase tracking-wider leading-none">PDF</span>
           </button>
         </div>
       </nav>
@@ -3732,27 +4061,29 @@ const App: React.FC = () => {
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.9, opacity: 0 }}
-              className="bg-white rounded-[32px] p-8 w-full max-w-sm shadow-2xl flex flex-col items-center text-center border border-gray-100"
+              className="bg-white dark:bg-slate-900 rounded-[32px] p-8 w-full max-w-sm shadow-2xl flex flex-col items-center text-center border border-gray-100 dark:border-slate-800"
             >
-              <div className="w-20 h-20 bg-red-50 rounded-full flex items-center justify-center text-red-500 mb-6 border border-red-100">
+              <div className="w-20 h-20 bg-red-50 dark:bg-red-950/50 rounded-full flex items-center justify-center text-red-500 mb-6 border border-red-100 dark:border-red-900/60">
                 <Trash2 size={32} strokeWidth={2.5} />
               </div>
-              <h3 className="text-2xl font-black text-brand-dark mb-3 tracking-tighter">Confirmar Exclusão</h3>
-              <p className="text-gray-500 font-bold text-sm mb-8 leading-relaxed px-4">
+              <h3 className="text-2xl font-black text-brand-dark dark:text-white mb-3 tracking-tighter">Confirmar Exclusão</h3>
+              <p className="text-gray-500 dark:text-slate-400 font-bold text-sm mb-8 leading-relaxed px-4">
                 {deleteModal.id === 'ALL' 
                   ? 'Tem certeza que deseja apagar TODO o histórico? Esta ação não poderá ser revertida.' 
                   : 'Deseja excluir permanentemente este registro de contagem?'}
               </p>
               <div className="flex gap-4 w-full">
                 <button 
+                  type="button"
                   onClick={() => setDeleteModal({ isOpen: false, id: '' })}
-                  className="flex-1 py-4 bg-gray-100 text-gray-500 rounded-2xl font-black uppercase text-xs tracking-widest active:scale-95 transition-all"
+                  className="flex-1 py-4 bg-gray-100 dark:bg-slate-800 text-gray-500 dark:text-slate-300 rounded-2xl font-black uppercase text-xs tracking-widest active:scale-95 transition-all cursor-pointer"
                 >
                   Cancelar
                 </button>
                 <button 
+                  type="button"
                   onClick={confirmDelete}
-                  className="flex-1 py-4 bg-brand-red text-white rounded-2xl font-black uppercase text-xs tracking-widest shadow-lg shadow-brand-red/20 active:scale-95 transition-all"
+                  className="flex-1 py-4 bg-brand-red text-white rounded-2xl font-black uppercase text-xs tracking-widest shadow-lg shadow-brand-red/20 active:scale-95 transition-all cursor-pointer"
                 >
                   Excluir
                 </button>
@@ -3775,30 +4106,30 @@ const App: React.FC = () => {
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.9, opacity: 0 }}
-              className="bg-white rounded-[32px] p-6 sm:p-8 w-full max-w-md shadow-2xl flex flex-col items-center text-center border border-gray-100"
+              className="bg-white dark:bg-slate-900 rounded-[32px] p-6 sm:p-8 w-full max-w-md shadow-2xl flex flex-col items-center text-center border border-gray-100 dark:border-slate-800"
             >
-              <div className="w-20 h-20 bg-rose-50 rounded-full flex items-center justify-center text-rose-600 mb-5 border border-rose-100">
+              <div className="w-20 h-20 bg-rose-50 dark:bg-rose-950/50 rounded-full flex items-center justify-center text-rose-600 dark:text-rose-400 mb-5 border border-rose-100 dark:border-rose-900/60">
                 <Trash2 size={36} strokeWidth={2.5} />
               </div>
-              <h3 className="text-2xl font-black text-brand-dark mb-2 tracking-tight uppercase">Excluir Marca</h3>
-              <p className="text-gray-600 font-bold text-sm mb-2">
-                Tem certeza que deseja excluir a marca <span className="text-rose-600 font-black uppercase">{deleteBrandModal.brandName}</span>?
+              <h3 className="text-2xl font-black text-brand-dark dark:text-white mb-2 tracking-tight uppercase">Excluir Marca</h3>
+              <p className="text-gray-600 dark:text-slate-300 font-bold text-sm mb-2">
+                Tem certeza que deseja excluir a marca <span className="text-rose-600 dark:text-rose-400 font-black uppercase">{deleteBrandModal.brandName}</span>?
               </p>
-              <p className="text-xs text-gray-400 font-medium mb-6 leading-relaxed">
-                Esta ação removerá permanentemente todos os <strong className="text-gray-700">{deleteBrandModal.count} lote(s)</strong> e <strong className="text-gray-700">{deleteBrandModal.pieces} peça(s)</strong> desta marca do servidor e do seu inventário.
+              <p className="text-xs text-gray-400 dark:text-slate-400 font-medium mb-6 leading-relaxed">
+                Esta ação removerá permanentemente todos os <strong className="text-gray-700 dark:text-slate-200">{deleteBrandModal.count} lote(s)</strong> e <strong className="text-gray-700 dark:text-slate-200">{deleteBrandModal.pieces} peça(s)</strong> desta marca do servidor e do seu inventário.
               </p>
               <div className="flex gap-3 w-full">
                 <button 
                   type="button"
                   onClick={() => setDeleteBrandModal({ isOpen: false, brandName: '', count: 0, pieces: 0 })}
-                  className="flex-1 py-4 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-2xl font-black uppercase text-xs tracking-wider active:scale-95 transition-all"
+                  className="flex-1 py-4 bg-gray-100 dark:bg-slate-800 hover:bg-gray-200 dark:hover:bg-slate-700 text-gray-600 dark:text-slate-300 rounded-2xl font-black uppercase text-xs tracking-wider active:scale-95 transition-all cursor-pointer"
                 >
                   Cancelar
                 </button>
                 <button 
                   type="button"
                   onClick={confirmDeleteBrand}
-                  className="flex-1 py-4 bg-rose-600 hover:bg-rose-700 text-white rounded-2xl font-black uppercase text-xs tracking-wider shadow-lg shadow-rose-600/30 active:scale-95 transition-all"
+                  className="flex-1 py-4 bg-rose-600 hover:bg-rose-700 text-white rounded-2xl font-black uppercase text-xs tracking-wider shadow-lg shadow-rose-600/30 active:scale-95 transition-all cursor-pointer"
                 >
                   Excluir Marca
                 </button>
@@ -3821,18 +4152,18 @@ const App: React.FC = () => {
               initial={{ scale: 0.95, y: 10 }}
               animate={{ scale: 1, y: 0 }}
               exit={{ scale: 0.95, y: 10 }}
-              className="bg-white rounded-[2.5rem] p-6 sm:p-8 w-full max-w-xl shadow-2xl flex flex-col max-h-[85vh] border border-gray-100"
+              className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-6 sm:p-8 w-full max-w-xl shadow-2xl flex flex-col max-h-[85vh] border border-gray-100 dark:border-slate-800"
             >
-              <div className="flex items-center justify-between pb-4 border-b border-gray-100 mb-4">
+              <div className="flex items-center justify-between pb-4 border-b border-gray-100 dark:border-slate-800 mb-4">
                 <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 bg-amber-50 rounded-2xl flex items-center justify-center text-amber-700 border border-amber-200/60 shrink-0">
+                  <div className="w-12 h-12 bg-amber-50 dark:bg-amber-950/40 rounded-2xl flex items-center justify-center text-amber-700 dark:text-amber-300 border border-amber-200/60 dark:border-amber-800/60 shrink-0">
                     <Edit2 size={22} strokeWidth={2.5} />
                   </div>
                   <div>
-                    <h3 className="text-xl font-black text-brand-dark uppercase tracking-tight">
+                    <h3 className="text-xl font-black text-brand-dark dark:text-white uppercase tracking-tight">
                       Editar & Atualizar: {brandEditModal.brandName}
                     </h3>
-                    <p className="text-xs text-gray-400 font-bold">
+                    <p className="text-xs text-gray-400 dark:text-slate-400 font-bold">
                       Ajuste quantidades ou altere detalhes dos lotes em tempo real
                     </p>
                   </div>
@@ -3840,7 +4171,7 @@ const App: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setBrandEditModal({ isOpen: false, brandName: '' })}
-                  className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full"
+                  className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-slate-800 rounded-full cursor-pointer"
                 >
                   <XCircle size={22} />
                 </button>
@@ -3855,8 +4186,8 @@ const App: React.FC = () => {
 
                   if (brandItems.length === 0) {
                     return (
-                      <div className="p-8 text-center bg-gray-50 rounded-2xl border border-dashed border-gray-200">
-                        <p className="text-sm font-bold text-gray-400 uppercase">Nenhum lote registrado nesta marca</p>
+                      <div className="p-8 text-center bg-gray-50 dark:bg-slate-800 rounded-2xl border border-dashed border-gray-200 dark:border-slate-700">
+                        <p className="text-sm font-bold text-gray-400 dark:text-slate-500 uppercase">Nenhum lote registrado nesta marca</p>
                       </div>
                     );
                   }
@@ -3864,24 +4195,24 @@ const App: React.FC = () => {
                   return brandItems.map(item => (
                     <div 
                       key={item.id} 
-                      className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                      className="p-4 bg-slate-50 dark:bg-slate-800/80 rounded-2xl border border-slate-200/80 dark:border-slate-700 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
                     >
                       <div className="min-w-0 flex-1">
-                        <span className="block font-black text-base text-slate-800 uppercase truncate">
+                        <span className="block font-black text-base text-slate-800 dark:text-white uppercase truncate">
                           {item.model}
                         </span>
-                        <span className="text-xs text-gray-500 font-medium block">
+                        <span className="text-xs text-gray-500 dark:text-slate-400 font-medium block">
                           Cor: {item.color || '-'} | Gênero: {item.gender || '-'} | Chegada: {item.arrivalMonth || '--'}/{item.arrivalYear || '--'}
                         </span>
                       </div>
 
                       {/* Quantity Controls & Edit Action */}
-                      <div className="flex items-center gap-2 justify-between sm:justify-end shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-200">
-                        <div className="flex items-center bg-white rounded-xl border border-slate-300 p-1 shadow-xs">
+                      <div className="flex items-center gap-2 justify-between sm:justify-end shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-200 dark:border-slate-700">
+                        <div className="flex items-center bg-white dark:bg-slate-900 rounded-xl border border-slate-300 dark:border-slate-700 p-1 shadow-xs">
                           <button
                             type="button"
                             onClick={() => handleUpdateItemQuantity(item.id, Math.max(0, item.total - 1))}
-                            className="w-8 h-8 flex items-center justify-center bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg active:scale-95 font-black"
+                            className="w-8 h-8 flex items-center justify-center bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-lg active:scale-95 font-black cursor-pointer"
                             title="Diminuir quantidade"
                           >
                             <Minus size={14} strokeWidth={3} />
@@ -3891,13 +4222,13 @@ const App: React.FC = () => {
                             type="number"
                             value={item.total}
                             onChange={(e) => handleUpdateItemQuantity(item.id, parseInt(e.target.value) || 0)}
-                            className="w-14 text-center font-black text-base text-brand-dark bg-transparent border-none focus:outline-none"
+                            className="w-14 text-center font-black text-base text-brand-dark dark:text-white bg-transparent border-none focus:outline-none"
                           />
 
                           <button
                             type="button"
                             onClick={() => handleUpdateItemQuantity(item.id, item.total + 1)}
-                            className="w-8 h-8 flex items-center justify-center bg-brand-blue text-white hover:bg-brand-dark rounded-lg active:scale-95 font-black"
+                            className="w-8 h-8 flex items-center justify-center bg-brand-blue text-white hover:bg-brand-dark rounded-lg active:scale-95 font-black cursor-pointer"
                             title="Aumentar quantidade"
                           >
                             <Plus size={14} strokeWidth={3} />
@@ -3910,7 +4241,7 @@ const App: React.FC = () => {
                             setBrandEditModal({ isOpen: false, brandName: '' });
                             handleEdit(item);
                           }}
-                          className="px-3 py-2 bg-amber-100 hover:bg-amber-200 text-amber-900 rounded-xl font-black text-xs uppercase flex items-center gap-1 border border-amber-300 shadow-xs"
+                          className="px-3 py-2 bg-amber-100 dark:bg-amber-950/60 hover:bg-amber-200 dark:hover:bg-amber-900/60 text-amber-900 dark:text-amber-300 rounded-xl font-black text-xs uppercase flex items-center gap-1 border border-amber-300 dark:border-amber-800 shadow-xs cursor-pointer"
                           title="Editar grade e detalhes completos deste lote"
                         >
                           <Edit2 size={14} strokeWidth={2.5} />
@@ -3920,7 +4251,7 @@ const App: React.FC = () => {
                         <button
                           type="button"
                           onClick={() => handleDelete(item.id)}
-                          className="p-2 text-rose-500 hover:bg-rose-100/70 rounded-xl active:scale-90 transition-all border border-transparent hover:border-rose-200"
+                          className="p-2 text-rose-500 hover:bg-rose-100/70 dark:hover:bg-rose-950/50 rounded-xl active:scale-90 transition-all border border-transparent hover:border-rose-200 dark:hover:border-rose-800 cursor-pointer"
                           title="Excluir Lote"
                         >
                           <Trash2 size={16} strokeWidth={2.5} />
@@ -3932,7 +4263,7 @@ const App: React.FC = () => {
               </div>
 
               {/* Modal Bottom Bar */}
-              <div className="pt-4 border-t border-gray-100 flex flex-col sm:flex-row items-center justify-between gap-3">
+              <div className="pt-4 border-t border-gray-100 dark:border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3">
                 <button
                   type="button"
                   onClick={() => {
@@ -3940,7 +4271,7 @@ const App: React.FC = () => {
                     setBrandEditModal({ isOpen: false, brandName: '' });
                     handleStartWithSameBrand(currentBrand);
                   }}
-                  className="w-full sm:w-auto py-3 px-5 bg-brand-blue hover:bg-brand-dark text-white font-black text-xs uppercase tracking-wider rounded-2xl flex items-center justify-center gap-2 shadow-md active:scale-95 transition-all"
+                  className="w-full sm:w-auto py-3 px-5 bg-brand-blue hover:bg-brand-dark text-white font-black text-xs uppercase tracking-wider rounded-2xl flex items-center justify-center gap-2 shadow-md active:scale-95 transition-all cursor-pointer"
                 >
                   <Plus size={16} strokeWidth={3} />
                   <span>Contar Novo Modelo em {brandEditModal.brandName}</span>
@@ -3949,7 +4280,7 @@ const App: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setBrandEditModal({ isOpen: false, brandName: '' })}
-                  className="w-full sm:w-auto py-3 px-6 bg-gray-100 hover:bg-gray-200 text-gray-700 font-black text-xs uppercase tracking-wider rounded-2xl active:scale-95 transition-all"
+                  className="w-full sm:w-auto py-3 px-6 bg-gray-100 dark:bg-slate-800 hover:bg-gray-200 dark:hover:bg-slate-700 text-gray-700 dark:text-slate-200 font-black text-xs uppercase tracking-wider rounded-2xl active:scale-95 transition-all cursor-pointer"
                 >
                   Concluído / Fechar
                 </button>
@@ -3972,7 +4303,7 @@ const App: React.FC = () => {
               initial={{ scale: 0.95, y: 15 }}
               animate={{ scale: 1, y: 0 }}
               exit={{ scale: 0.95, y: 15 }}
-              className="bg-white rounded-[2.5rem] w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col my-8 max-h-[90vh] border border-gray-100 text-brand-dark"
+              className="bg-white dark:bg-slate-900 rounded-[2.5rem] w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col my-8 max-h-[90vh] border border-gray-100 dark:border-slate-800 text-brand-dark dark:text-slate-100"
             >
               {/* Top Header Banner */}
               <div className="bg-brand-dark p-4 text-center text-white flex items-center justify-between px-6">
@@ -3985,28 +4316,28 @@ const App: React.FC = () => {
                 <button 
                   type="button"
                   onClick={() => setViewingBrandPreview(null)}
-                  className="p-1 text-gray-400 hover:text-white rounded-full transition-colors"
+                  className="p-1 text-gray-400 hover:text-white rounded-full transition-colors cursor-pointer"
                 >
                   <XCircle size={22} />
                 </button>
               </div>
 
               {/* Modal Body */}
-              <div className="p-6 sm:p-8 space-y-6 overflow-y-auto flex-1 bg-gradient-to-b from-white to-brand-slate/10">
+              <div className="p-6 sm:p-8 space-y-6 overflow-y-auto flex-1 bg-gradient-to-b from-white to-brand-slate/10 dark:from-slate-900 dark:to-slate-950">
                 <div className="text-center space-y-1">
-                  <h3 className="text-3xl font-display font-black text-brand-dark tracking-tight leading-none uppercase">
+                  <h3 className="text-3xl font-display font-black text-brand-dark dark:text-white tracking-tight leading-none uppercase">
                     {viewingBrandPreview.brandName}
                   </h3>
-                  <p className="text-[10px] font-black text-brand-blue uppercase tracking-widest">
+                  <p className="text-[10px] font-black text-brand-blue dark:text-blue-400 uppercase tracking-widest">
                     IDEAL TECIDOS • Controle de Estoque
                   </p>
                   <div className="pt-2 flex items-center justify-center gap-2">
                     {completedBrands[viewingBrandPreview.brandName] ? (
-                      <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-800 border border-emerald-200 flex items-center gap-1">
+                      <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 flex items-center gap-1">
                         <CheckCircle2 size={13} /> Contagem Concluída
                       </span>
                     ) : (
-                      <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-blue-100 text-blue-800 border border-blue-200 flex items-center gap-1">
+                      <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-blue-100 dark:bg-blue-950/60 text-blue-800 dark:text-blue-300 border border-blue-200 dark:border-blue-800 flex items-center gap-1">
                         ⏳ Em Contagem
                       </span>
                     )}
@@ -4015,21 +4346,21 @@ const App: React.FC = () => {
 
                 {/* Cards for Overview Metrics */}
                 <div className="grid grid-cols-3 gap-3">
-                  <div className="bg-brand-blue/5 border border-brand-blue/20 rounded-2xl p-4 text-center space-y-1">
-                    <span className="text-[9px] font-black text-brand-blue uppercase tracking-wider block">Total de Peças</span>
-                    <span className="text-2xl sm:text-3xl font-display font-black text-brand-blue block">
+                  <div className="bg-brand-blue/5 dark:bg-blue-950/40 border border-brand-blue/20 dark:border-blue-800/60 rounded-2xl p-4 text-center space-y-1">
+                    <span className="text-[9px] font-black text-brand-blue dark:text-blue-300 uppercase tracking-wider block">Total de Peças</span>
+                    <span className="text-2xl sm:text-3xl font-display font-black text-brand-blue dark:text-blue-400 block">
                       {viewingBrandPreview.items.reduce((s, i) => s + (i.total || 0), 0)}
                     </span>
                   </div>
-                  <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-center space-y-1">
-                    <span className="text-[9px] font-black text-gray-500 uppercase tracking-wider block">Modelos</span>
-                    <span className="text-2xl sm:text-3xl font-display font-black text-brand-dark block">
+                  <div className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-4 text-center space-y-1">
+                    <span className="text-[9px] font-black text-gray-500 dark:text-slate-400 uppercase tracking-wider block">Modelos</span>
+                    <span className="text-2xl sm:text-3xl font-display font-black text-brand-dark dark:text-white block">
                       {new Set(viewingBrandPreview.items.map(i => (i.model || '').toLowerCase().trim())).size}
                     </span>
                   </div>
-                  <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-center space-y-1">
-                    <span className="text-[9px] font-black text-gray-500 uppercase tracking-wider block">Lotes</span>
-                    <span className="text-2xl sm:text-3xl font-display font-black text-brand-dark block">
+                  <div className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-4 text-center space-y-1">
+                    <span className="text-[9px] font-black text-gray-500 dark:text-slate-400 uppercase tracking-wider block">Lotes</span>
+                    <span className="text-2xl sm:text-3xl font-display font-black text-brand-dark dark:text-white block">
                       {viewingBrandPreview.items.length}
                     </span>
                   </div>
@@ -4038,11 +4369,11 @@ const App: React.FC = () => {
                 {/* CONTAGEM GERAL POR TAMANHO (GRADE CONSOLIDADA DA MARCA) */}
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-black text-brand-dark uppercase tracking-widest flex items-center gap-1.5">
-                      <BarChart3 size={16} className="text-brand-blue" />
+                    <span className="text-xs font-black text-brand-dark dark:text-white uppercase tracking-widest flex items-center gap-1.5">
+                      <BarChart3 size={16} className="text-brand-blue dark:text-blue-400" />
                       Contagem Geral por Tamanho (Grade Consolidada)
                     </span>
-                    <span className="text-[10px] font-black text-gray-400 uppercase">
+                    <span className="text-[10px] font-black text-gray-400 dark:text-slate-400 uppercase">
                       Soma da Marca
                     </span>
                   </div>
@@ -4067,21 +4398,53 @@ const App: React.FC = () => {
 
                     if (sortedEntries.length === 0) {
                       return (
-                        <div className="p-4 text-center bg-gray-50 rounded-2xl border border-dashed border-gray-200 text-xs font-bold text-gray-400 uppercase">
+                        <div className="p-4 text-center bg-gray-50 dark:bg-slate-800 rounded-2xl border border-dashed border-gray-200 dark:border-slate-700 text-xs font-bold text-gray-400 dark:text-slate-500 uppercase">
                           Nenhuma quantidade contada nesta marca
                         </div>
                       );
                     }
 
                     return (
-                      <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 p-4 bg-slate-50/60 border-b border-gray-100">
-                          {sortedEntries.map(([sz, count]) => (
-                            <div key={sz} className="bg-white p-3 rounded-xl border border-gray-200/80 text-center shadow-2xs">
-                              <span className="text-xs font-black text-brand-accent block uppercase">{sz}</span>
-                              <span className="text-lg font-black text-brand-dark block mt-0.5">{count} <span className="text-[10px] font-bold text-gray-400">pcs</span></span>
-                            </div>
-                          ))}
+                      <div className="bg-white dark:bg-slate-800/80 border border-gray-200 dark:border-slate-700 rounded-2xl overflow-hidden shadow-sm">
+                        <div className="px-4 py-2.5 bg-slate-50 dark:bg-slate-900/60 border-b border-gray-100 dark:border-slate-700 flex flex-wrap items-center justify-between gap-2 text-[10px] font-bold">
+                          <span className="text-gray-500 dark:text-slate-400 uppercase tracking-wider">Indicador para Compras:</span>
+                          <div className="flex items-center gap-3">
+                            <span className="flex items-center gap-1 text-rose-700 dark:text-rose-400"><span className="w-2 h-2 rounded-full bg-rose-500"></span> Baixo (1-2)</span>
+                            <span className="flex items-center gap-1 text-slate-700 dark:text-slate-300"><span className="w-2 h-2 rounded-full bg-slate-400"></span> Médio (3-5)</span>
+                            <span className="flex items-center gap-1 text-emerald-700 dark:text-emerald-400"><span className="w-2 h-2 rounded-full bg-emerald-500"></span> Cheio (6+)</span>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 p-4 bg-slate-50/60 dark:bg-slate-900/30 border-b border-gray-100 dark:border-slate-700">
+                          {sortedEntries.map(([sz, count]) => {
+                            const isLow = count <= 2;
+                            const isFull = count >= 6;
+                            return (
+                              <div
+                                key={sz}
+                                className={`p-3 rounded-xl border text-center shadow-2xs relative ${
+                                  isLow
+                                    ? 'bg-rose-50/70 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800/60'
+                                    : isFull
+                                      ? 'bg-emerald-50/70 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800/60'
+                                      : 'bg-white dark:bg-slate-900 border-gray-200/80 dark:border-slate-700'
+                                }`}
+                              >
+                                <span className={`text-xs font-black block uppercase ${
+                                  isLow ? 'text-rose-700 dark:text-rose-400' : isFull ? 'text-emerald-700 dark:text-emerald-400' : 'text-brand-accent'
+                                }`}>
+                                  Tam {sz}
+                                </span>
+                                <span className="text-lg font-black text-brand-dark dark:text-white block mt-0.5">
+                                  {count} <span className="text-[10px] font-bold text-gray-400">pcs</span>
+                                </span>
+                                {isLow && (
+                                  <span className="inline-block mt-1 px-1.5 py-0.5 rounded bg-rose-100 dark:bg-rose-900/60 text-rose-700 dark:text-rose-300 text-[8px] font-black uppercase tracking-wider">
+                                    Repor
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })}
                         </div>
                         <div className="p-3 px-4 bg-brand-dark text-white flex items-center justify-between">
                           <span className="text-xs font-black uppercase tracking-wider text-white/70">TOTAL GERAL CONSOLIDADO</span>
@@ -4096,7 +4459,7 @@ const App: React.FC = () => {
 
                 {/* DETALHAMENTO DOS LOTES / MODELOS */}
                 <div className="space-y-3 pt-2">
-                  <span className="text-xs font-black text-brand-dark uppercase tracking-widest block">
+                  <span className="text-xs font-black text-brand-dark dark:text-white uppercase tracking-widest block">
                     Detalhamento dos Lotes ({viewingBrandPreview.items.length})
                   </span>
                   <div className="space-y-2.5">
@@ -4107,22 +4470,22 @@ const App: React.FC = () => {
                         .join(', ');
 
                       return (
-                        <div key={item.id || idx} className="p-4 bg-white border border-gray-200 rounded-2xl shadow-2xs space-y-2">
+                        <div key={item.id || idx} className="p-4 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-2xl shadow-2xs space-y-2">
                           <div className="flex items-center justify-between gap-2">
                             <div>
-                              <span className="font-black text-sm text-brand-dark uppercase block">
+                              <span className="font-black text-sm text-brand-dark dark:text-white uppercase block">
                                 {item.model} {item.gender ? `(${item.gender})` : ''}
                               </span>
-                              <span className="text-xs text-gray-500 font-medium block">
+                              <span className="text-xs text-gray-500 dark:text-slate-400 font-medium block">
                                 Cor: {item.color || '-'} | Chegada: {item.arrivalMonth || '--'}/{item.arrivalYear || '--'}
                               </span>
                             </div>
-                            <span className="px-3 py-1 bg-brand-blue/10 text-brand-blue rounded-xl font-black text-sm border border-brand-blue/20 shrink-0">
+                            <span className="px-3 py-1 bg-brand-blue/10 dark:bg-blue-950/60 text-brand-blue dark:text-blue-300 rounded-xl font-black text-sm border border-brand-blue/20 dark:border-blue-800 shrink-0">
                               {item.total} pcs
                             </span>
                           </div>
                           {sizeSummary && (
-                            <div className="text-[11px] font-bold text-slate-600 bg-slate-50 p-2 rounded-xl border border-slate-100">
+                            <div className="text-[11px] font-bold text-slate-600 dark:text-slate-300 bg-slate-50 dark:bg-slate-900 p-2 rounded-xl border border-slate-100 dark:border-slate-700">
                               Grade: {sizeSummary}
                             </div>
                           )}
@@ -4134,17 +4497,62 @@ const App: React.FC = () => {
               </div>
 
               {/* Action Buttons */}
-              <div className="p-6 bg-brand-slate border-t border-gray-100 flex flex-col sm:flex-row gap-3">
+              <div className="p-5 sm:p-6 bg-brand-slate dark:bg-slate-950 border-t border-gray-100 dark:border-slate-800 flex flex-wrap gap-2.5 sm:gap-3">
                 <button 
                   type="button"
                   onClick={() => {
                     generateBrandPDF(viewingBrandPreview.brandName, viewingBrandPreview.items);
                     showToast('PDF da Marca baixado com sucesso!', 'success');
                   }}
-                  className="flex-1 py-3.5 bg-brand-red text-white hover:brightness-110 rounded-2xl font-black uppercase text-xs tracking-widest shadow-lg shadow-brand-red/20 active:scale-95 transition-all flex items-center justify-center gap-2"
+                  className="flex-1 min-w-[120px] py-3.5 px-4 bg-brand-red text-white hover:brightness-110 rounded-2xl font-black uppercase text-xs tracking-wider shadow-lg shadow-brand-red/20 active:scale-95 transition-all flex items-center justify-center gap-2 cursor-pointer"
                 >
                   <Download size={16} />
-                  Baixar PDF da Marca
+                  Baixar PDF
+                </button>
+
+                <button 
+                  type="button"
+                  onClick={() => {
+                    handleGenerateBrandExcel(viewingBrandPreview.brandName, viewingBrandPreview.items);
+                  }}
+                  className="py-3.5 px-4 bg-emerald-700 hover:bg-emerald-800 text-white rounded-2xl font-black uppercase text-xs tracking-wider flex items-center justify-center gap-1.5 shadow-md active:scale-95 transition-all cursor-pointer"
+                >
+                  <FileSpreadsheet size={16} />
+                  Excel
+                </button>
+
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const aggregated: Record<string, number> = {};
+                    viewingBrandPreview.items.forEach(item => {
+                      Object.entries(item.sizes || {}).forEach(([sz, q]) => {
+                        const v = Number(q) || 0;
+                        if (v > 0) aggregated[sz] = (aggregated[sz] || 0) + v;
+                      });
+                    });
+                    const sorted = Object.entries(aggregated).sort((a, b) => {
+                      const na = parseFloat(a[0]);
+                      const nb = parseFloat(b[0]);
+                      return !isNaN(na) && !isNaN(nb) ? na - nb : a[0].localeCompare(b[0]);
+                    });
+                    const totalPcs = sorted.reduce((acc, [_, c]) => acc + c, 0);
+                    const gradeText = sorted.map(([sz, c]) => `Tam ${sz}: ${c}`).join(' | ');
+                    const lowSizes = sorted.filter(([_, c]) => c <= 2).map(([sz, c]) => `${sz} (${c})`).join(', ');
+                    const summary = `📦 *ESTOQUE - ${viewingBrandPreview.brandName.toUpperCase()}*\nTotal: *${totalPcs} peças* (${viewingBrandPreview.items.length} lotes)\n\n📊 *Grade Consolidada:*\n${gradeText}${lowSizes ? `\n\n⚠️ *Baixo / Repor:* ${lowSizes}` : ''}`;
+                    try {
+                      await navigator.clipboard.writeText(summary);
+                      setCopiedBrandSummary(true);
+                      showToast('Resumo copiado para colar no WhatsApp!', 'success');
+                      setTimeout(() => setCopiedBrandSummary(false), 2500);
+                    } catch {
+                      showToast('Não foi possível copiar automaticamente', 'error');
+                    }
+                  }}
+                  className="py-3.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-black uppercase text-xs tracking-wider flex items-center justify-center gap-1.5 shadow-md active:scale-95 transition-all cursor-pointer"
+                >
+                  {copiedBrandSummary ? <Check size={16} /> : <Copy size={16} />}
+                  <span>{copiedBrandSummary ? 'Copiado!' : 'WhatsApp'}</span>
                 </button>
 
                 <button 
@@ -4154,16 +4562,16 @@ const App: React.FC = () => {
                     setViewingBrandPreview(null);
                     setBrandEditModal({ isOpen: true, brandName });
                   }}
-                  className="py-3.5 px-5 bg-amber-100 hover:bg-amber-200 text-amber-900 rounded-2xl font-black uppercase text-xs tracking-wider flex items-center justify-center gap-1.5 border border-amber-300 active:scale-95 transition-all"
+                  className="py-3.5 px-4 bg-amber-100 dark:bg-amber-950/60 hover:bg-amber-200 dark:hover:bg-amber-900/60 text-amber-900 dark:text-amber-300 rounded-2xl font-black uppercase text-xs tracking-wider flex items-center justify-center gap-1.5 border border-amber-300 dark:border-amber-800 active:scale-95 transition-all cursor-pointer"
                 >
                   <Edit2 size={16} />
-                  Editar / Atualizar
+                  Editar
                 </button>
 
                 <button 
                   type="button"
                   onClick={() => setViewingBrandPreview(null)}
-                  className="py-3.5 px-6 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-2xl font-black uppercase text-xs tracking-wider active:scale-95 transition-all"
+                  className="py-3.5 px-5 bg-gray-200 dark:bg-slate-800 hover:bg-gray-300 dark:hover:bg-slate-700 text-gray-700 dark:text-slate-200 rounded-2xl font-black uppercase text-xs tracking-wider active:scale-95 transition-all cursor-pointer"
                 >
                   Fechar
                 </button>
@@ -4186,7 +4594,7 @@ const App: React.FC = () => {
               initial={{ scale: 0.95, y: 15 }}
               animate={{ scale: 1, y: 0 }}
               exit={{ scale: 0.95, y: 15 }}
-              className="bg-white rounded-[2.5rem] w-full max-w-lg shadow-2xl overflow-hidden flex flex-col my-8 max-h-[90vh] border border-gray-100 text-brand-dark"
+              className="bg-white dark:bg-slate-900 rounded-[2.5rem] w-full max-w-lg shadow-2xl overflow-hidden flex flex-col my-8 max-h-[90vh] border border-gray-100 dark:border-slate-800 text-brand-dark dark:text-slate-100"
             >
               {/* Paper Top Decorative Header */}
               <div className="bg-brand-red p-4 text-center text-white flex items-center justify-center gap-2">
@@ -4195,20 +4603,20 @@ const App: React.FC = () => {
               </div>
 
               {/* Receipt Area (Scrollable if needed, paper-styled) */}
-              <div className="p-8 space-y-6 overflow-y-auto flex-1 bg-gradient-to-b from-white to-brand-slate/10">
+              <div className="p-8 space-y-6 overflow-y-auto flex-1 bg-gradient-to-b from-white to-brand-slate/10 dark:from-slate-900 dark:to-slate-950">
                 <div className="text-center space-y-1">
                   <h3 className="text-3xl font-display font-black text-brand-red tracking-tight leading-none">IDEAL TECIDOS</h3>
-                  <p className="text-[10px] font-black text-brand-blue uppercase tracking-widest">Controle de Estoque • Comprovante</p>
-                  <p className="text-[9px] text-gray-400 font-bold uppercase">Gerado em {new Date(viewingPdfItem.createdAt).toLocaleString('pt-BR')}</p>
+                  <p className="text-[10px] font-black text-brand-blue dark:text-blue-400 uppercase tracking-widest">Controle de Estoque • Comprovante</p>
+                  <p className="text-[9px] text-gray-400 dark:text-slate-400 font-bold uppercase">Gerado em {new Date(viewingPdfItem.createdAt).toLocaleString('pt-BR')}</p>
                 </div>
 
                 {/* Meta details grid */}
-                <div className="bg-white border border-gray-100 rounded-2xl p-5 space-y-3.5 shadow-sm">
+                <div className="bg-white dark:bg-slate-800 border border-gray-100 dark:border-slate-700 rounded-2xl p-5 space-y-3.5 shadow-sm">
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <span className="text-[9px] font-black text-gray-400 uppercase tracking-wider block mb-0.5">Marca</span>
+                      <span className="text-[9px] font-black text-gray-400 dark:text-slate-400 uppercase tracking-wider block mb-0.5">Marca</span>
                       <div className="flex items-center justify-between gap-1">
-                        <span className="text-sm font-bold text-brand-dark uppercase truncate">{viewingPdfItem.brand || '-'}</span>
+                        <span className="text-sm font-bold text-brand-dark dark:text-white uppercase truncate">{viewingPdfItem.brand || '-'}</span>
                         {viewingPdfItem.brand && (
                           <button
                             type="button"
@@ -4219,7 +4627,7 @@ const App: React.FC = () => {
                               );
                               setViewingBrandPreview({ brandName: bName, items: brandItems });
                             }}
-                            className="text-[9px] font-black text-indigo-700 bg-indigo-50 hover:bg-indigo-100 px-2 py-0.5 rounded-lg border border-indigo-200 uppercase flex items-center gap-1 shrink-0 active:scale-95 transition-all"
+                            className="text-[9px] font-black text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 px-2 py-0.5 rounded-lg border border-indigo-200 dark:border-indigo-800 uppercase flex items-center gap-1 shrink-0 active:scale-95 transition-all cursor-pointer"
                             title="Ver contagem geral de toda esta marca"
                           >
                             <Eye size={10} />
@@ -4229,15 +4637,15 @@ const App: React.FC = () => {
                       </div>
                     </div>
                     <div>
-                      <span className="text-[9px] font-black text-gray-400 uppercase tracking-wider block mb-0.5">Tipo de Produto</span>
-                      <span className="text-sm font-bold text-brand-dark uppercase block truncate">{viewingPdfItem.productType || '-'}</span>
+                      <span className="text-[9px] font-black text-gray-400 dark:text-slate-400 uppercase tracking-wider block mb-0.5">Tipo de Produto</span>
+                      <span className="text-sm font-bold text-brand-dark dark:text-white uppercase block truncate">{viewingPdfItem.productType || '-'}</span>
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-4 border-t border-dashed border-gray-100 pt-3.5">
+                  <div className="grid grid-cols-2 gap-4 border-t border-dashed border-gray-100 dark:border-slate-700 pt-3.5">
                     <div>
-                      <span className="text-[9px] font-black text-gray-400 uppercase tracking-wider block mb-0.5">Modelo</span>
-                      <span className="text-sm font-bold text-brand-dark uppercase flex items-center gap-1.5 truncate">
+                      <span className="text-[9px] font-black text-gray-400 dark:text-slate-400 uppercase tracking-wider block mb-0.5">Modelo</span>
+                      <span className="text-sm font-bold text-brand-dark dark:text-white uppercase flex items-center gap-1.5 truncate">
                         <span>{viewingPdfItem.model || '-'}</span>
                         {viewingPdfItem.gender && (
                           <span className={`text-[8px] px-1 py-0.5 rounded font-black ${
@@ -4252,14 +4660,14 @@ const App: React.FC = () => {
                       </span>
                     </div>
                     <div>
-                      <span className="text-[9px] font-black text-gray-400 uppercase tracking-wider block mb-0.5">Cor</span>
-                      <span className="text-sm font-bold text-brand-dark uppercase block truncate">{viewingPdfItem.color || '-'}</span>
+                      <span className="text-[9px] font-black text-gray-400 dark:text-slate-400 uppercase tracking-wider block mb-0.5">Cor</span>
+                      <span className="text-sm font-bold text-brand-dark dark:text-white uppercase block truncate">{viewingPdfItem.color || '-'}</span>
                     </div>
                   </div>
 
                   {(viewingPdfItem.arrivalMonth || viewingPdfItem.arrivalYear) && (
-                    <div className="border-t border-dashed border-gray-100 pt-3.5">
-                      <span className="text-[9px] font-black text-gray-400 uppercase tracking-wider block mb-0.5">Mês/Ano de Chegada</span>
+                    <div className="border-t border-dashed border-gray-100 dark:border-slate-700 pt-3.5">
+                      <span className="text-[9px] font-black text-gray-400 dark:text-slate-400 uppercase tracking-wider block mb-0.5">Mês/Ano de Chegada</span>
                       <span className="text-sm font-bold text-brand-red flex items-center gap-1.5 uppercase">
                         <TrendingUp size={12} />
                         {viewingPdfItem.arrivalMonth || '--'}/{viewingPdfItem.arrivalYear || '--'}
@@ -4270,12 +4678,12 @@ const App: React.FC = () => {
 
                 {/* Table of sizes */}
                 <div className="space-y-3">
-                  <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Grade de Tamanhos</span>
+                  <span className="text-[10px] font-black text-gray-400 dark:text-slate-400 uppercase tracking-widest ml-1">Grade de Tamanhos</span>
                   
-                  <div className="bg-white border border-gray-100 rounded-2xl overflow-hidden shadow-sm">
+                  <div className="bg-white dark:bg-slate-800 border border-gray-100 dark:border-slate-700 rounded-2xl overflow-hidden shadow-sm">
                     <table className="w-full text-left border-collapse">
                       <thead>
-                        <tr className="bg-brand-blue/5 text-[9px] font-black uppercase tracking-wider text-brand-blue border-b border-gray-100">
+                        <tr className="bg-brand-blue/5 dark:bg-slate-900/60 text-[9px] font-black uppercase tracking-wider text-brand-blue dark:text-blue-400 border-b border-gray-100 dark:border-slate-700">
                           <th className="p-4 text-center">Tamanho</th>
                           <th className="p-4 text-center">Quantidade Contada</th>
                         </tr>
@@ -4284,9 +4692,9 @@ const App: React.FC = () => {
                         {Object.entries(viewingPdfItem.sizes)
                           .filter(([_, qty]) => (qty as any) > 0)
                           .map(([size, qty]) => (
-                            <tr key={size} className="border-b border-gray-50 last:border-0 hover:bg-brand-slate/30 transition-colors">
+                            <tr key={size} className="border-b border-gray-50 dark:border-slate-700 last:border-0 hover:bg-brand-slate/30 dark:hover:bg-slate-700/40 transition-colors">
                               <td className="p-4 text-center text-sm font-black text-brand-accent">{size}</td>
-                              <td className="p-4 text-center text-sm font-black text-brand-dark">{qty} pares</td>
+                              <td className="p-4 text-center text-sm font-black text-brand-dark dark:text-white">{qty} pares</td>
                             </tr>
                           ))}
                       </tbody>
@@ -4305,14 +4713,14 @@ const App: React.FC = () => {
               </div>
 
               {/* Action Buttons */}
-              <div className="p-6 bg-brand-slate border-t border-gray-100 flex flex-col gap-3">
+              <div className="p-6 bg-brand-slate dark:bg-slate-950 border-t border-gray-100 dark:border-slate-800 flex flex-col gap-3">
                 <div className="flex gap-3">
                   <button 
                     onClick={() => {
                       generateSinglePDF(viewingPdfItem);
                       showToast('PDF baixado com sucesso!');
                     }}
-                    className="flex-1 py-4 bg-brand-red text-white hover:brightness-110 rounded-2xl font-black uppercase text-xs tracking-widest shadow-lg shadow-brand-red/20 active:scale-95 transition-all flex items-center justify-center gap-2"
+                    className="flex-1 py-4 bg-brand-red text-white hover:brightness-110 rounded-2xl font-black uppercase text-xs tracking-widest shadow-lg shadow-brand-red/20 active:scale-95 transition-all flex items-center justify-center gap-2 cursor-pointer"
                   >
                     <Download size={16} />
                     Baixar PDF
@@ -4416,7 +4824,7 @@ const App: React.FC = () => {
                       }
                       showToast('Impressora iniciada!');
                     }}
-                    className="flex-1 py-4 bg-brand-blue text-white hover:brightness-110 rounded-2xl font-black uppercase text-xs tracking-widest shadow-lg shadow-brand-blue/20 active:scale-95 transition-all flex items-center justify-center gap-2"
+                    className="flex-1 py-4 bg-brand-blue text-white hover:brightness-110 rounded-2xl font-black uppercase text-xs tracking-widest shadow-lg shadow-brand-blue/20 active:scale-95 transition-all flex items-center justify-center gap-2 cursor-pointer"
                   >
                     <Printer size={16} />
                     Imprimir
@@ -4425,7 +4833,7 @@ const App: React.FC = () => {
 
                 <button 
                   onClick={() => setViewingPdfItem(null)}
-                  className="w-full py-4 bg-gray-100 hover:bg-gray-200 text-gray-500 rounded-2xl font-black uppercase text-xs tracking-widest active:scale-95 transition-all"
+                  className="w-full py-4 bg-gray-100 dark:bg-slate-800 hover:bg-gray-200 dark:hover:bg-slate-700 text-gray-500 dark:text-slate-300 rounded-2xl font-black uppercase text-xs tracking-widest active:scale-95 transition-all cursor-pointer"
                 >
                   Fechar sem baixar
                 </button>

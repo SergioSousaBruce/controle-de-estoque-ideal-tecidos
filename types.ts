@@ -34,6 +34,7 @@ export enum AppView {
   AUDIT_LOGS = 'AUDIT_LOGS',         // Módulo 4: Histórico & Auditoria
   COMPARE = 'COMPARE',               // Ferramenta: Comparação entre Inventários
   ANALYTICS = 'ANALYTICS',           // Ferramenta: Relatórios e Análises Visual
+  PURCHASING = 'PURCHASING',         // Central de Compras e Grade Furada
   BARCODE_FIREBASE = 'BARCODE_FIREBASE', // Visão Legada / Rápida
   IDENTIFY = 'IDENTIFY',
   COUNT = 'COUNT',
